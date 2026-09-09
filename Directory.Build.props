@@ -1,0 +1,25 @@
+<Project>
+  <!--
+    Route ALL `dotnet build` / `dotnet test` output to ../.dotnet-build/
+    instead of inside each project's bin/ + obj/ folders.
+
+    Why: Unity scans every file inside the package folder when it's imported
+    via UPM, and tries to load every .dll it finds as a native plugin. Output
+    inside Runtime/bin or Tests/Editor/bin collides with:
+      - the .asmdef-produced Playloop.dll (duplicate name → "Plugin has the
+        same filename as Assembly Definition File" warning),
+      - Unity's bundled nunit.framework.dll (different version, "editor-only"
+        rejection error from UnityEngine.TestRunner),
+      - the test-runner / VS Test Platform DLLs (broken Mono/Mac load).
+
+    Routing output to a sibling directory keeps the Unity package folder
+    100% source-only, which is what UPM expects.
+
+    The OutDir is relative to MSBuildThisFileDirectory so every project under
+    this repo shares the same artifact root.
+  -->
+  <PropertyGroup>
+    <BaseOutputPath>$(MSBuildThisFileDirectory).dotnet-build/$(MSBuildProjectName)/bin/</BaseOutputPath>
+    <BaseIntermediateOutputPath>$(MSBuildThisFileDirectory).dotnet-build/$(MSBuildProjectName)/obj/</BaseIntermediateOutputPath>
+  </PropertyGroup>
+</Project>

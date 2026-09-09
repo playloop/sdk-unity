@@ -1,0 +1,37 @@
+# Strip .NET / Unity / IDE artifacts from `npm pack` tarballs and any tool
+# that publishes the package. Unity-side artifacts in particular CANNOT
+# ship inside a UPM package. Unity will try to load every .dll it finds
+# inside Packages/ as a native plugin and crash on the duplicates.
+
+# .NET build output
+bin/
+obj/
+*.user
+*.suo
+
+# Unity-side outputs (when this dir is opened as a Unity project)
+Library/
+Temp/
+Logs/
+UserSettings/
+Build/
+Builds/
+
+# Coverage
+coverage/
+TestResults/
+*.coverage
+*.coveragexml
+
+# IDE
+.vs/
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# Local-only files
+.git/
+.github/
+*.md.bak

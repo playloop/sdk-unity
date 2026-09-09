@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Dual-purpose project file. Inside Unity, Unity ignores this and uses the
+    .asmdef next to it instead. Outside Unity, `dotnet build` and `dotnet test`
+    use THIS file and compile the same source.
+
+    PLAYLOOP_DOTNET_STANDALONE gates out any UnityEngine-dependent code so the
+    standalone build stays clean.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <LangVersion>10.0</LangVersion>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Playloop</RootNamespace>
+    <AssemblyName>Playloop</AssemblyName>
+    <DefineConstants>$(DefineConstants);PLAYLOOP_DOTNET_STANDALONE</DefineConstants>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,58 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Test, package, and release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore tests
+        # The trailing `~` on `Tests~/` is intentional. Unity excludes
+        # tilde-suffixed folders from UPM imports so test code doesn't ship
+        # to consumers. dotnet doesn't care about the suffix.
+        run: dotnet restore Tests~/Editor/Playloop.Tests.csproj
+
+      - name: Run tests
+        run: dotnet test Tests~/Editor/Playloop.Tests.csproj --no-restore --verbosity normal
+
+      - name: Resolve tag
+        id: tag
+        run: echo "name=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Build release archive
+        run: |
+          TAG="${{ steps.tag.outputs.name }}"
+          ARCHIVE="playloop-unity-${TAG}.zip"
+          zip -r "$ARCHIVE" \
+            package.json \
+            README.md \
+            LICENSE \
+            CHANGELOG.md \
+            Runtime/ \
+            Editor/ \
+            Samples~/
+          echo "archive=$ARCHIVE" >> "$GITHUB_OUTPUT"
+        id: package
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.name }}
+          name: ${{ steps.tag.outputs.name }}
+          generate_release_notes: true
+          files: ${{ steps.package.outputs.archive }}

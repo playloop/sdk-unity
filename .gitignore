@@ -1,0 +1,34 @@
+# .NET build output (routed to .dotnet-build/ via Directory.Build.props so
+# Unity-scanned folders stay clean; we keep the legacy bin/ + obj/ entries
+# here in case someone runs `dotnet build` from a shell that bypasses the
+# props file).
+.dotnet-build/
+bin/
+obj/
+*.user
+*.suo
+
+# Unity-side outputs (when this dir is opened as a Unity project)
+Library/
+Temp/
+Logs/
+UserSettings/
+Build/
+Builds/
+
+# Coverage
+coverage/
+TestResults/
+*.coverage
+*.coveragexml
+
+# IDE
+.vs/
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# Machine-local denylist for the .githooks content gate (never commit).
+.githooks/denylist.local

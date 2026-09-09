@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+#
+# pre-commit: two blocking gates for this repo.
+#   (a) em-dash gate:  block any staged ADDED line containing an em dash.
+#   (b) denylist gate: block any staged ADDED line containing a denylisted term
+#                      (personal paths, keys, internal names) before it lands.
+#
+# Both scan only the staged additions, so an existing line elsewhere never
+# blocks an unrelated commit. Install once per clone with .githooks/install.sh
+# (sets core.hooksPath). Whole-tree check: .githooks/release-check.sh.
+#
+# Portable: POSIX awk only, so it runs on the BSD awk that ships with macOS as
+# well as on gawk.
+
+set -euo pipefail
+
+added_lines() {
+  git diff --cached --unified=0 --no-color -- . | awk '
+    /^\+\+\+ / { file=$0; sub(/^\+\+\+ b\//,"",file); sub(/^\+\+\+ /,"",file); next }
+    /^@@ /     { plus=$3; sub(/^\+/,"",plus); sub(/,.*/,"",plus); ln=plus+0; next }
+    /^\+/      { print file ":" ln ": " substr($0,2); ln++ }
+  '
+}
+
+fail=0
+stream="$(added_lines || true)"
+
+# --- Gate (a): em dash (U+2014) ---
+# Em dash only. En dash (U+2013) is correct typography for numeric/version
+# ranges (10-20Hz, 5.3-5.8) and is not gated. Byte escape so this file never
+# contains the char it bans.
+EMDASH="$(printf '\342\200\224')"
+emdash_hits="$(printf '%s\n' "$stream" | grep -F -e "$EMDASH" || true)"
+if [ -n "$emdash_hits" ]; then
+  echo "BLOCKED: staged change adds an em dash:"
+  printf '%s\n' "$emdash_hits" | sed 's/^/  /'
+  echo ""
+  echo "Use a period, comma, colon, or parentheses instead."
+  fail=1
+fi
+
+# --- Gate (b): denylisted terms ---
+# Terms live in .githooks/denylist.local (gitignored), one per line, comments
+# allowed. A missing or empty denylist REFUSES the commit: a gate with nothing
+# to check silently passes everything. Copy denylist.example and fill it in.
+denylist_file="$(git rev-parse --show-toplevel)/.githooks/denylist.local"
+if [ ! -f "$denylist_file" ]; then
+  echo "BLOCKED: .githooks/denylist.local is missing."
+  echo "Copy .githooks/denylist.example to .githooks/denylist.local and fill in"
+  echo "your real terms (it is gitignored, never committed)."
+  exit 1
+fi
+DENYLIST="$(grep -v '^\s*#' "$denylist_file" | grep -v '^\s*$' | paste -sd'|' -)"
+if [ -z "$DENYLIST" ]; then
+  echo "BLOCKED: .githooks/denylist.local has no terms in it."
+  exit 1
+fi
+
+deny_hits="$(printf '%s\n' "$stream" | grep -iE "$DENYLIST" || true)"
+if [ -n "$deny_hits" ]; then
+  echo "BLOCKED: staged change adds a denylisted term:"
+  printf '%s\n' "$deny_hits" | sed 's/^/  /'
+  echo ""
+  echo "This is a public-facing repo. Remove the personal path, key, or internal"
+  echo "name before committing. Whole-tree scan: .githooks/release-check.sh."
+  fail=1
+fi
+
+if [ "$fail" -ne 0 ]; then
+  echo ""
+  echo "Commit rejected. Fix the lines above and re-commit."
+  exit 1
+fi
+exit 0

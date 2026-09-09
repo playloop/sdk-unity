@@ -1,0 +1,45 @@
+{
+  "name": "gg.playloop.sdk",
+  "displayName": "Playloop SDK",
+  "version": "0.5.0",
+  "unity": "2021.3",
+  "description": "Official Unity SDK for Playloop \u2014 read every playtest, find what mattered.",
+  "license": "MIT",
+  "author": {
+    "name": "Turtlevania Games LLC",
+    "url": "https://playloop.gg"
+  },
+  "documentationUrl": "https://playloop.gg/docs",
+  "changelogUrl": "https://github.com/playloop/sdk-unity/blob/main/CHANGELOG.md",
+  "licensesUrl": "https://github.com/playloop/sdk-unity/blob/main/LICENSE",
+  "keywords": [
+    "playloop",
+    "playtest",
+    "telemetry",
+    "analytics",
+    "indie",
+    "ai"
+  ],
+  "category": "Tools",
+  "dependencies": {
+    "com.unity.nuget.newtonsoft-json": "3.2.1",
+    "com.unity.ugui": "2.0.0"
+  },
+  "samples": [
+    {
+      "displayName": "Basic Usage",
+      "description": "A MonoBehaviour that ingests a session and streams telemetry.",
+      "path": "Samples~/BasicUsage"
+    },
+    {
+      "displayName": "Player Feedback",
+      "description": "Opens the SDK's default UGUI feedback form and prints the submission result.",
+      "path": "Samples~/Feedback"
+    },
+    {
+      "displayName": "Bug Reports",
+      "description": "Opens the SDK's default UGUI bug-report form and prints the filed report id.",
+      "path": "Samples~/BugReports"
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+# denylist.example - copy to denylist.local (gitignored) and fill in for real.
+#
+# One term or extended-regex pattern per line; lines starting with # are
+# comments. The pre-commit hook and .githooks/content-audit.sh join these with
+# | and grep case-insensitively. Put in everything that must never appear in
+# this public repo: personal home paths, personal domains, internal names, and
+# live-key shapes.
+#
+# NEVER commit the real list.
+/Users/<your-username>
+my-personal-domain\.example
+my-internal-name
+sk-[A-Za-z0-9]{16,}
+sk_live_[A-Za-z0-9]+
+pk_live_[A-Za-z0-9]+

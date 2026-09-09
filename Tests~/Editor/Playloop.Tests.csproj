@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Same dual-purpose trick as Runtime/Playloop.csproj. Unity uses the .asmdef
+    next to this file; `dotnet test` uses this .csproj.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>10.0</LangVersion>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Playloop.Tests</RootNamespace>
+    <AssemblyName>Playloop.Tests</AssemblyName>
+    <DefineConstants>$(DefineConstants);PLAYLOOP_DOTNET_STANDALONE</DefineConstants>
+    <IsPackable>false</IsPackable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.10.0" />
+    <PackageReference Include="NUnit" Version="3.14.0" />
+    <PackageReference Include="NUnit3TestAdapter" Version="4.5.0" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\Runtime\Playloop.csproj" />
+  </ItemGroup>
+
+</Project>
