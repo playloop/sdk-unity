@@ -993,7 +993,7 @@ namespace Playloop.Feedback
             rt.anchorMax = new Vector2(1f, 1f);
             rt.pivot = new Vector2(1f, 1f);
             rt.anchoredPosition = new Vector2(-8f, -8f);
-            rt.sizeDelta = new Vector2(30f, 30f);
+            rt.sizeDelta = new Vector2(36f, 36f);
             var btn = go.AddComponent<Button>();
             btn.targetGraphic = go.GetComponent<Image>();
             btn.onClick.AddListener(() => onClose());
