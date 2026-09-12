@@ -39,6 +39,8 @@ namespace Playloop.Feedback
 
         /// <summary>Label on the dismiss button. Override to localize.</summary>
         public string CancelLabel { get; set; } = "Cancel";
+        public string YesLabel { get; set; } = "Yes";
+        public string NoLabel { get; set; } = "No";
 
         /// <summary>Label on the submit button. Override to localize.</summary>
         public string SendLabel { get; set; } = "Send";
@@ -676,7 +678,7 @@ namespace Playloop.Feedback
 
             var yesBg = AddImage(row.transform, "Yes", theme.InputBgColor);
             yesBg.AddComponent<LayoutElement>().minHeight = 36f;
-            AddCenteredLabel(yesBg.transform, "Yes", theme);
+            AddCenteredLabel(yesBg.transform, theme.YesLabel, theme);
             var yesBtn = yesBg.AddComponent<Button>();
             yesBtn.targetGraphic = yesBg.GetComponent<Image>();
             MakeHoverable(yesBg, theme);
@@ -690,7 +692,7 @@ namespace Playloop.Feedback
 
             var noBg = AddImage(row.transform, "No", theme.InputBgColor);
             noBg.AddComponent<LayoutElement>().minHeight = 36f;
-            AddCenteredLabel(noBg.transform, "No", theme);
+            AddCenteredLabel(noBg.transform, theme.NoLabel, theme);
             var noBtn = noBg.AddComponent<Button>();
             noBtn.targetGraphic = noBg.GetComponent<Image>();
             MakeHoverable(noBg, theme);
