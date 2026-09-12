@@ -1156,7 +1156,8 @@ namespace Playloop.Feedback
             t.horizontalOverflow = HorizontalWrapMode.Wrap;
             t.verticalOverflow = VerticalWrapMode.Truncate;
             var le = go.AddComponent<LayoutElement>();
-            le.preferredHeight = isHeading ? 28f : (isHelp ? 18f : 20f);
+            // Text supplies its wrapped preferred height; this only sets the minimum.
+            le.minHeight = isHeading ? 28f : (isHelp ? 18f : 20f);
         }
 
         /// <summary>Marketing site the branding badge links to.</summary>
