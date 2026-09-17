@@ -65,6 +65,24 @@ namespace Playloop.Identity
                 // session persisted (or DefaultLevel on first run).
             }
         }
+
+        /// <summary>
+        /// Test-only: drop the persisted level so the next <see cref="Get"/>
+        /// returns <see cref="DefaultLevel"/>. Same seam as the standalone
+        /// stub, so a test suite resets the store the same way in both hosts.
+        /// </summary>
+        public static void __ResetForTests()
+        {
+            try
+            {
+                PlayerPrefs.DeleteKey(PlayerPrefsKey);
+                PlayerPrefs.Save();
+            }
+            catch
+            {
+                // Sandboxed env: nothing persisted, nothing to drop.
+            }
+        }
     }
 }
 #else

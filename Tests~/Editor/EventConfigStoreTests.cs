@@ -38,6 +38,10 @@ namespace Playloop.Tests
                 // HeartbeatEmitter.EmitOnce() directly.
                 HeartbeatSec = 0,
                 AutoShutdownOnQuit = false,
+                // These tests assert on the telemetry bodies, so the
+                // suppress-in-editor gate must not drain them when the suite
+                // runs inside the Unity editor.
+                SendInEditor = true,
             };
             var client = new PlayloopClient(options);
             // Drop the constructor-fired session_start anchor so this

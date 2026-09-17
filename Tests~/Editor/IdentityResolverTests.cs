@@ -12,8 +12,10 @@ namespace Playloop.Tests
     /// Outside Unity (under <c>dotnet test</c>) the resolver returns null,
     /// the stores back to per-process static fields, and the consent store
     /// defaults to <c>"anonymous"</c>. Inside Unity the resolver may find
-    /// Steamworks via reflection or iOS IDFV. Same contract either way
-    /// (returns null when nothing's detected, never throws).
+    /// Steamworks via reflection or iOS IDFV, and the stores write to the
+    /// host project's PlayerPrefs, which persist across tests and across
+    /// runs. Same contract either way (returns null when nothing's detected,
+    /// never throws), so every test starts and ends from the empty stores.
     /// </summary>
     [TestFixture]
     public class IdentityResolverTests
@@ -22,7 +24,21 @@ namespace Playloop.Tests
         public void Reset()
         {
             VendorIdResolver.__ResetForTests();
+            ClearStores();
+        }
+
+        [TearDown]
+        public void Cleanup()
+        {
+            // Leave nothing behind in the host's PlayerPrefs: a value written
+            // here would otherwise be read back by the next run of the suite.
+            ClearStores();
+        }
+
+        private static void ClearStores()
+        {
             LinkedIdStore.Clear();
+            ConsentStore.__ResetForTests();
         }
 
         [Test]

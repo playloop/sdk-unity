@@ -319,8 +319,19 @@ namespace Playloop.Tests
             using var cts = new CancellationTokenSource();
             cts.Cancel();
 
-            Assert.ThrowsAsync<OperationCanceledException>(async () =>
+            // CatchAsync, not ThrowsAsync: the contract is "an
+            // OperationCanceledException reaches the caller", and the exact
+            // type depends on the runtime. An async method that throws
+            // OperationCanceledException completes its Task as canceled; .NET
+            // (Core) keeps the original exception on the Task and rethrows it,
+            // while Mono (the Unity editor) surfaces a fresh
+            // TaskCanceledException, a subtype. Both satisfy the contract.
+            Assert.CatchAsync<OperationCanceledException>(async () =>
                 await h.SendAsync(NewRequest(), cts.Token));
+
+            // Honored before the first attempt: no request, no backoff sleep.
+            Assert.AreEqual(0, stub.Calls);
+            Assert.AreEqual(0, delay.Delays.Count);
         }
     }
 }

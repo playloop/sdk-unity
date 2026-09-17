@@ -19,8 +19,9 @@ namespace Playloop.Tests
             Assert.AreEqual(1, handler.Calls.Count);
             Assert.AreEqual("Bearer pl_ik_test", handler.Calls[0].Headers["Authorization"]);
             Assert.AreEqual("application/json", handler.Calls[0].Headers["Accept"]);
-            // Default env stamped on every request.
-            Assert.AreEqual("production", handler.Calls[0].Headers["X-Playloop-Environment"]);
+            // Default env stamped on every request: auto-derived from the build
+            // when the consumer leaves it at the default.
+            Assert.AreEqual(TestHost.DerivedEnvironment, handler.Calls[0].Headers["X-Playloop-Environment"]);
             // SDK identifier so /api/telemetry can attribute sessions to the Unity card.
             Assert.AreEqual("unity", handler.Calls[0].Headers["X-Playloop-SDK"]);
         }
@@ -58,8 +59,10 @@ namespace Playloop.Tests
         }
 
         [Test]
-        public async Task EmptyEnvironment_FallsBackToProduction()
+        public async Task EmptyEnvironment_FallsBackToBuildDerivedDefault()
         {
+            // Whitespace counts as unset: the header carries the build-derived
+            // default, never an empty string.
             var handler = MockHttpHandler.ReturnsJson("[]");
             var options = new PlayloopOptions
             {
@@ -70,7 +73,7 @@ namespace Playloop.Tests
             };
             using var client = new PlayloopClient(options);
             await client.Sessions.ListAsync();
-            Assert.AreEqual("production", handler.Calls[0].Headers["X-Playloop-Environment"]);
+            Assert.AreEqual(TestHost.DerivedEnvironment, handler.Calls[0].Headers["X-Playloop-Environment"]);
         }
 
         [Test]
