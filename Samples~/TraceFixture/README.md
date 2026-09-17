@@ -30,5 +30,6 @@ Expected wire: three `trace_chunk` events (seq 0, 1, 2) at 10 Hz on plane `xy`, 
 ## Reading the result
 
 - The `trace_state` event never appears for this run: the fixture forces `TraceMode.On`.
-- Session metadata carries `traceChunks: 3` on the final flush, so a missing chunk shows as a gap rather than as a shorter route.
+- The final flush carries `traceChunks: 3`, top-level and in the session metadata, so a missing chunk shows as a gap rather than as a shorter route.
+- Stopping Play before the route finishes leaves the session end to the SDK's own play-mode hook; once the route has finished, the fixture waits up to three seconds for its end to reach the wire before it disposes the client.
 - If nothing arrives, check that `SendInEditor` is on and that the key belongs to the game you are looking at.

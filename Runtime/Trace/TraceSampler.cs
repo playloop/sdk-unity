@@ -44,6 +44,13 @@ namespace Playloop.Trace
         /// <summary>An entity is re-emitted only after it moves farther than this.</summary>
         public const double EntityMoveThreshold = 0.05;
 
+        /// <summary>
+        /// Most rooms whose declared bounds are remembered over the client's
+        /// lifetime. Past it a new room id is still sampled, only its bounds
+        /// are dropped; rooms already declared keep updating.
+        /// </summary>
+        public const int MaxRoomBounds = 1024;
+
         /// <summary>Receives each finished chunk document and its <c>t0</c>.</summary>
         public delegate void ChunkSink(Dictionary<string, object> chunk, long t0UnixMs);
 
@@ -66,6 +73,7 @@ namespace Playloop.Trace
         private double _ax;
         private double _ay;
         private readonly Dictionary<string, object[]> _roomBounds = new Dictionary<string, object[]>(StringComparer.Ordinal);
+        private bool _warnedRoomBoundsCap;
         private string[] _actions = Array.Empty<string>();
         private bool _actionsDirty = true;
 
@@ -81,7 +89,10 @@ namespace Playloop.Trace
         }
 
         private readonly List<Entity> _entities = new List<Entity>();
-        private int _entityNamesUsed;
+        // The distinct names this session has tracked. The cap is on names,
+        // so a name that despawns and comes back takes no second slot, and a
+        // new session starts the count over from the names it carries.
+        private readonly HashSet<string> _sessionEntityNames = new HashSet<string>(StringComparer.Ordinal);
         private bool _warnedEntityCap;
 
         // The one open chunk.
@@ -154,11 +165,19 @@ namespace Playloop.Trace
         {
             _wired = true;
             _roomId = roomId;
-            if (bounds.HasValue)
+            if (!bounds.HasValue) return;
+
+            if (!_roomBounds.ContainsKey(roomId) && _roomBounds.Count >= MaxRoomBounds)
             {
-                var b = bounds.Value;
-                _roomBounds[roomId] = new[] { Q2(b.XMin), Q2(b.YMin), Q2(b.XMax), Q2(b.YMax) };
+                if (!_warnedRoomBoundsCap)
+                {
+                    _warnedRoomBoundsCap = true;
+                    Warn?.Invoke($"[Playloop] Trace: bounds for room \"{roomId}\" dropped, this client already remembers bounds for {MaxRoomBounds} rooms. The room is still sampled; Playback fits a frame to its data.");
+                }
+                return;
             }
+            var b = bounds.Value;
+            _roomBounds[roomId] = new[] { Q2(b.XMin), Q2(b.YMin), Q2(b.XMax), Q2(b.YMax) };
         }
 
         public void SetPosition(double x, double y, int facing)
@@ -183,16 +202,19 @@ namespace Playloop.Trace
             var en = Find(name);
             if (en == null)
             {
-                if (_entityNamesUsed >= _maxEntities)
+                if (!_sessionEntityNames.Contains(name))
                 {
-                    if (!_warnedEntityCap)
+                    if (_sessionEntityNames.Count >= _maxEntities)
                     {
-                        _warnedEntityCap = true;
-                        Warn?.Invoke($"[Playloop] Trace: entity \"{name}\" ignored, the session already tracks {_maxEntities} names (TraceOptions.MaxEntities).");
+                        if (!_warnedEntityCap)
+                        {
+                            _warnedEntityCap = true;
+                            Warn?.Invoke($"[Playloop] Trace: entity \"{name}\" ignored, the session already tracks {_maxEntities} names (TraceOptions.MaxEntities).");
+                        }
+                        return;
                     }
-                    return;
+                    _sessionEntityNames.Add(name);
                 }
-                _entityNamesUsed++;
                 en = new Entity { Name = name };
                 _entities.Add(en);
             }
@@ -284,7 +306,17 @@ namespace Playloop.Trace
             _ended = false;
             _actionsDirty = true;
             _warnedEntityCap = false;
-            foreach (var en in _entities) en.EmittedThisChunk = false;
+            // A despawn still pending belongs to the session that just ended:
+            // the new session never saw that entity, so it is dropped rather
+            // than written as a despawn row. The names carried in are the
+            // ones still alive, and they count against the new session's cap.
+            _entities.RemoveAll(en => en.Despawn);
+            _sessionEntityNames.Clear();
+            foreach (var en in _entities)
+            {
+                en.EmittedThisChunk = false;
+                _sessionEntityNames.Add(en.Name);
+            }
         }
 
         private void Sample(double sec, long nowUnixMs)

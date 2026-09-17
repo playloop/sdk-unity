@@ -304,6 +304,10 @@ namespace Playloop.Tests
         public void SessionEndedFlush_CarriesTraceChunkCount()
         {
             var endBody = _run.Bodies.Single(b => b["sessionEnded"] != null && b["sessionEnded"]!.Value<bool>());
+            // Top-level is the field the server reads on an append; the
+            // metadata copy only counts when the session creates and ends in
+            // one flush.
+            Assert.AreEqual(3, endBody["traceChunks"]!.Value<int>());
             Assert.AreEqual(3, endBody["sessionMetadata"]!["traceChunks"]!.Value<int>());
         }
 
@@ -361,11 +365,20 @@ namespace Playloop.Tests
             }
             byte[] actual = new UTF8Encoding(false).GetBytes(sb.ToString());
 
-            bool update = !File.Exists(path) || Environment.GetEnvironmentVariable(UpdateGoldenEnv) == "1";
+            // The golden is only ever written on purpose. A missing file is a
+            // failure, not a reason to mint one: a test that regenerates its
+            // own oracle can never go red.
+            bool update = Environment.GetEnvironmentVariable(UpdateGoldenEnv) == "1";
             if (update)
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(path)!);
                 File.WriteAllBytes(path, actual);
+            }
+            else if (!File.Exists(path))
+            {
+                Assert.Fail(
+                    $"Trace golden is missing at {path}. It is committed on purpose; " +
+                    $"to regenerate it deliberately, re-run with {UpdateGoldenEnv}=1 and commit the file.");
             }
 
             byte[] committed = File.ReadAllBytes(path);

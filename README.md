@@ -224,7 +224,7 @@ Every string on the wire is a label you declared (an action, a room id, an entit
 
 The wording Playloop's own privacy notice uses, which you can quote or link from your store page's privacy field:
 
-> sampled gameplay state from games that enable Trace: player position and facing, the current room or level id, abstract action flags and movement axes, and up to a small number of named in-game object positions, 10 to 20 times a second. Never keystrokes, text, screen, audio, or camera.
+> sampled gameplay state from games that enable Trace: player position and facing, the current room or level id, abstract action flags and movement axes, and up to a small number of named in-game object positions, 5 to 20 times a second. Never keystrokes, text, screen, audio, or camera.
 
 Link that item from your Steam privacy field (or the equivalent on your store) when you ship a build with the Trace on, the same way you disclose the rest of your telemetry.
 

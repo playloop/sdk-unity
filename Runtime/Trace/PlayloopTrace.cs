@@ -27,7 +27,7 @@ namespace Playloop.Trace
         [Tooltip("Room or level id for this position: lowercase slug, letters, digits, _ : - (for example z3:pylon_corridors). Change it from code with SetRoom when the player moves rooms.")]
         public string roomId = "";
 
-        [Tooltip("Which two world axes the Trace carries. XY for side-on and 2D, XZ for top-down and 3D. Match TraceOptions.Plane.")]
+        [Tooltip("Which two world axes the Trace carries. XY for side-on and 2D, XZ for top-down and 3D. The client's TraceOptions.Plane is the one that counts: Attach adopts it and warns if this differed.")]
         public TracePlane plane = TracePlane.XY;
 
         [Tooltip("Derive facing from the direction of travel. Off: facing comes from the Transform's rotation (right on XY, forward on XZ).")]
@@ -42,17 +42,26 @@ namespace Playloop.Trace
         private bool _warnedPlane;
         private bool _warnedRoom;
 
-        /// <summary>Hand the component the client whose Trace it feeds.</summary>
+        /// <summary>
+        /// Hand the component the client whose Trace it feeds. The client's
+        /// <c>TraceOptions.Plane</c> is the plane the chunks declare, so it is
+        /// the one this component projects on; the Inspector value is adopted
+        /// from it here, with a warning if it disagreed.
+        /// </summary>
         public void Attach(PlayloopClient client)
         {
             _client = client;
             _lastRoomId = "";
-            if (client != null && client.Trace.Plane != plane && !_warnedPlane)
+            if (client != null && client.Trace.Plane != plane)
             {
-                _warnedPlane = true;
-                Debug.LogWarning(
-                    $"[Playloop] PlayloopTrace on \"{name}\" samples plane {plane} but TraceOptions.Plane is {client.Trace.Plane}. " +
-                    "Playback labels the axes from the options; make them match.");
+                if (!_warnedPlane)
+                {
+                    _warnedPlane = true;
+                    Debug.LogWarning(
+                        $"[Playloop] PlayloopTrace on \"{name}\" was set to plane {plane} but TraceOptions.Plane is {client.Trace.Plane}. " +
+                        "The Trace declares the options plane, so this component now samples on it.");
+                }
+                plane = client.Trace.Plane;
             }
         }
 
@@ -73,8 +82,11 @@ namespace Playloop.Trace
             var t = target != null ? target : transform;
             var p = t.position;
 
+            // Always the plane the chunks declare, never a field that can
+            // drift from it after Attach.
+            var tracePlane = client.Trace.Plane;
             float x = p.x;
-            float y = plane == TracePlane.XZ ? p.z : p.y;
+            float y = tracePlane == TracePlane.XZ ? p.z : p.y;
 
             if (facingFromVelocity)
             {
@@ -93,8 +105,8 @@ namespace Playloop.Trace
             }
             else
             {
-                var dir = plane == TracePlane.XZ ? t.forward : t.right;
-                float fy = plane == TracePlane.XZ ? dir.z : dir.y;
+                var dir = tracePlane == TracePlane.XZ ? t.forward : t.right;
+                float fy = tracePlane == TracePlane.XZ ? dir.z : dir.y;
                 _facing = Mathf.Atan2(fy, dir.x) * Mathf.Rad2Deg;
             }
 

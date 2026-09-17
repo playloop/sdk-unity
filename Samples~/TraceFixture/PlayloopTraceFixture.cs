@@ -29,7 +29,11 @@ namespace Playloop.Samples.TraceFixture
         [Tooltip("Environment slug for the fixture session. Keep it 'dev' so the run is easy to filter out.")]
         public string Environment = "dev";
 
+        /// <summary>How long OnDestroy waits for a session end still in flight.</summary>
+        private const int ShutdownWaitMs = 3000;
+
         private PlayloopClient? _client;
+        private Task? _endTask;
         private Transform? _player;
         private Transform? _key;
         private string _room = "";
@@ -77,7 +81,11 @@ namespace Playloop.Samples.TraceFixture
             {
                 _done = true;
                 _client.Trace.End(TraceEndReason.Death);
-                _ = EndSessionAsync();
+                // Keep the task: OnDestroy waits on it before the client goes
+                // away, so the final chunk and the end signal are not lost to
+                // a scene change or a stopped Play.
+                _endTask = _client.Telemetry.EndSessionAsync();
+                _ = ReportEndAsync(_endTask);
             }
         }
 
@@ -114,13 +122,11 @@ namespace Playloop.Samples.TraceFixture
             }
         }
 
-        private async Task EndSessionAsync()
+        private static async Task ReportEndAsync(Task end)
         {
-            var client = _client;
-            if (client == null) return;
             try
             {
-                await client.Telemetry.EndSessionAsync();
+                await end;
                 Debug.Log("[Playloop] Trace fixture finished: the session ended at (50, 5) in vault. Open it on the dashboard to check Playback.");
             }
             catch (System.Exception e)
@@ -133,7 +139,31 @@ namespace Playloop.Samples.TraceFixture
         {
             var client = _client;
             _client = null;
-            client?.Dispose();
+            if (client == null) return;
+
+            // Same bounded wait the SDK's own quit hook uses: give an end
+            // still in flight a moment to reach the wire before disposing the
+            // client that is sending it. Not on WebGL, where blocking the only
+            // thread would deadlock the request it is waiting for.
+            var end = _endTask;
+            _endTask = null;
+#if !UNITY_WEBGL || UNITY_EDITOR
+            if (end != null && !end.IsCompleted)
+            {
+                try
+                {
+                    if (!end.Wait(ShutdownWaitMs))
+                    {
+                        Debug.LogWarning($"[Playloop] Trace fixture: the session end did not finish within {ShutdownWaitMs} ms; the final chunk may be lost.");
+                    }
+                }
+                catch (System.AggregateException)
+                {
+                    // Already reported by ReportEndAsync.
+                }
+            }
+#endif
+            client.Dispose();
         }
 
         // ───────────────────────── scene ─────────────────────────

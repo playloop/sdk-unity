@@ -301,28 +301,39 @@ namespace Playloop.Telemetry
             try { _trace?.End(Playloop.Trace.TraceEndReason.Quit); }
             catch { /* the Trace must never block the session end */ }
 
-            try
+            // The flush that delivers sessionEnded completes the end (see
+            // CompleteSessionEnd). If it fails, the end stays requested and
+            // the events go back on the buffer, so the next flush, from the
+            // batch loop or a retry of this call, sends the same end again.
+            // Nothing about the session, the Trace's seq included, resets
+            // until the server has taken the end.
+            await FlushAsync(ct).ConfigureAwait(Playloop.PlAwait.Continue);
+        }
+
+        /// <summary>
+        /// The session is over as far as the wire is concerned: clear the
+        /// cached session id and staged metadata so the next Track/Flush
+        /// starts a fresh session, and re-arm the Trace. Runs once the end
+        /// flush has been acknowledged, or when the suppress-in-editor gate
+        /// drops it (nothing will ever be sent).
+        /// </summary>
+        private void CompleteSessionEnd()
+        {
+            lock (_bufferLock)
             {
-                await FlushAsync(ct).ConfigureAwait(Playloop.PlAwait.Continue);
+                _currentSessionId = null;
+                // Intentionally keep _deviceId. It's the stable
+                // per-install identifier from PlayloopClient (or an
+                // explicit StartSession override). The next session
+                // should stamp the same id; clearing it here would
+                // either drop the id entirely or force the consumer
+                // to re-pass it on every StartSession call.
+                _sessionMetadata = null;
+                _endRequested = false;
+                _sessionActive = false;
             }
-            finally
-            {
-                lock (_bufferLock)
-                {
-                    _currentSessionId = null;
-                    // Intentionally keep _deviceId. It's the stable
-                    // per-install identifier from PlayloopClient (or an
-                    // explicit StartSession override). The next session
-                    // should stamp the same id; clearing it here would
-                    // either drop the id entirely or force the consumer
-                    // to re-pass it on every StartSession call.
-                    _sessionMetadata = null;
-                    _endRequested = false;
-                    _sessionActive = false;
-                }
-                try { _trace?.ResetForNewSession(); }
-                catch { /* best effort */ }
-            }
+            try { _trace?.ResetForNewSession(); }
+            catch { /* best effort */ }
         }
 
         /// <summary>
@@ -419,11 +430,15 @@ namespace Playloop.Telemetry
             // (IsDevelopmentBuild is false) and outside Unity / under dotnet test.
             if (!_sendInEditor && PlayloopRuntimeEnv.IsDevelopmentBuild)
             {
+                bool endPending;
                 lock (_bufferLock)
                 {
                     _buffer.Clear();
-                    _endRequested = false;
+                    endPending = _endRequested;
                 }
+                // A requested end will never reach the wire from here, so it
+                // is complete as far as the session is concerned.
+                if (endPending) CompleteSessionEnd();
                 WarnEditorSuppressionOnce();
                 return;
             }
@@ -462,9 +477,14 @@ namespace Playloop.Telemetry
                     body["sessionEnded"] = true;
                     // The final flush says how many Trace chunks the session
                     // wrote, so Playback can tell a hard stop from a lost chunk.
+                    // It rides as a top-level field, because session metadata
+                    // is only read on the create request and the end is
+                    // usually an append; the metadata copy stays for a session
+                    // that creates and ends in one flush.
                     int traceChunks = _trace?.ChunkCount ?? 0;
                     if (traceChunks > 0)
                     {
+                        body["traceChunks"] = traceChunks;
                         var stamped = metadata == null
                             ? new Dictionary<string, object>()
                             : new Dictionary<string, object>(metadata);
@@ -522,10 +542,15 @@ namespace Playloop.Telemetry
                             }
                         }
                     }
+
+                    // The server has taken the end: only now does the
+                    // session (and the Trace's seq) start over.
+                    if (sessionEnded) CompleteSessionEnd();
                 }
                 catch
                 {
-                    // Re-queue events at the front so order is preserved.
+                    // Re-queue events at the front so order is preserved. A
+                    // requested end stays requested, so the retry carries it.
                     lock (_bufferLock)
                     {
                         _buffer.InsertRange(0, events);
