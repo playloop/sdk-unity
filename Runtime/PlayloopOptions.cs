@@ -206,6 +206,14 @@ namespace Playloop
         public AutoInstrumentOptions AutoInstrument { get; set; } = new();
 
         /// <summary>
+        /// Sampled session state for Playback (position, room, action bits,
+        /// axes, a few named entities), sent as <c>trace_chunk</c> events.
+        /// <c>Mode</c> defaults to <c>Auto</c>: on everywhere except a
+        /// <c>"production"</c> environment. See <see cref="Trace.TraceOptions"/>.
+        /// </summary>
+        public Playloop.Trace.TraceOptions Trace { get; set; } = new();
+
+        /// <summary>
         /// True when this options bag carries the minimum config the client
         /// needs to actually talk to Playloop: a non-empty ingest key and a
         /// non-empty base URL. When false, <see cref="PlayloopClient"/>

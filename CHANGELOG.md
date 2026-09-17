@@ -14,6 +14,35 @@ the manifest, the runtime `SDK_VERSION` constant, and the CHANGELOG
 aligned so the dashboard's "shipped on" attribution stays accurate
 during the remaining pre-launch iterations.
 
+### Added: Trace (added 2026-09-17)
+
+Sampled session state for Playback. `client.Trace` takes the player's
+position and facing, the current room (with optional bounds), an abstract
+action mask and movement axes, and up to eight named entities, samples them
+5 to 20 times a second on the SDK's own driver, and ships one chunk every
+five seconds as a `trace_chunk` event on the normal telemetry batch. Playback
+draws the route as a ghost; the per-level view shows every session's path and
+where sessions ended.
+
+- `TraceApi`: `DefineActions`, `SetRoom`, `SetPosition`, `SetInput`,
+  `SetEntity` / `ClearEntity`, `Pause` / `Resume`, `End(reason)`, `Status`,
+  and the sampling seam `Tick(unscaledSec)`. Every string is a validated
+  slug; sample rows are eight numbers; nothing takes an engine type.
+- `PlayloopOptions.Trace` (`TraceOptions`: `Mode` Auto/On/Off, `Hz`,
+  `Plane`, `MaxEntities`, `MaxBytesPerSession`), mirrored on the settings
+  asset and in the Settings window. `Auto` is on everywhere except a
+  `"production"` environment.
+- `PlayloopTrace` component (**Playloop → Trace**), the package's first
+  Inspector-facing MonoBehaviour: feeds a Transform's position and heading.
+- The session end closes the Trace with `Quit` and stamps
+  `sessionMetadata.traceChunks` on the final flush; when the Trace is off for
+  a session, one `trace_state` event says why.
+- **Trace Fixture** sample: a tiny scripted game that walks a known path
+  through three rooms and dies at (50, 5) in `vault`, with a committed golden
+  of its three chunks so every engine's fixture can be checked byte for byte.
+- README: a Trace section and "What the Trace sends", the sentence to link
+  from a store privacy field.
+
 ### Changed: ingest-key-only config, no more game slug / id (added 2026-06-24)
 
 Setup is now just the ingest key. The SDK resolves your game (id, slug, name)

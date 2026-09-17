@@ -11,7 +11,7 @@ namespace Playloop.Tests
     /// <summary>
     /// End-to-end tests for <see cref="RetryingHttpHandler"/>. A stub
     /// <see cref="IHttpHandler"/> returns canned responses (or throws), a
-    /// recording <see cref="IDelayProvider"/> captures every sleep, and the
+    /// capturing <see cref="IDelayProvider"/> notes every sleep, and the
     /// random + clock seams are deterministic, so each scenario asserts both
     /// "correct number of calls" AND "correct delay between them" without
     /// real wall-clock waits.

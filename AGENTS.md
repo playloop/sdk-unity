@@ -119,6 +119,45 @@ client.State.SetState(new Dictionary<string, object?> { { "final_score", score }
 client.State.IncrementState(new Dictionary<string, object?> { { "kills_total", 1 } });
 ```
 
+## Trace (sampled session state for Playback)
+
+`client.Trace` samples where the player is 5 to 20 times a second and ships it as
+`trace_chunk` events so Playback can draw the route and the per-level view can
+show where sessions ended. Push the latest values; the SDK samples on its own
+driver once `AutoBatch()` runs. Nothing takes an engine type:
+
+```csharp
+using Playloop.Trace;
+
+client.Trace.DefineActions("move", "jump", "attack");            // bit i = labels[i], up to 16
+client.Trace.SetRoom("crypt", new TraceBounds(20, 0, 40, 10));   // slug id, optional bounds
+client.Trace.SetPosition(x, y, facingDeg);                       // every frame; facing -1 = unknown
+client.Trace.SetInput(actionBits, axisX, axisY);                 // abstract mask + move vector
+client.Trace.SetEntity("key", kx, ky);   client.Trace.ClearEntity("key");
+client.Trace.Pause();  client.Trace.Resume();                    // cutscene, menu, bot run
+client.Trace.End(TraceEndReason.Death);                          // Quit is sent for you at session end
+```
+
+Labels are lowercase slugs (`^[a-z][a-z0-9_]{0,23}$` for actions, room ids may
+also carry `:` and `-`, up to 64 chars) and a bad one throws `ArgumentException`
+even on a disabled client. **There is no overload that takes a `KeyCode`, an
+`InputAction`, a button name, or a string**; do not add one. Sample rows are
+eight numbers. `Trace.Status` explains why nothing is flowing (`OffByEnvironment`
+in a `"production"` build under the default `TraceMode.Auto`, `OffByOption`,
+`OffByConfig`, `Disabled`, `BudgetExhausted`, `Ended`). Options live on
+`PlayloopOptions.Trace` (`Mode`, `Hz`, `Plane`, `MaxEntities`, `MaxBytesPerSession`).
+
+**`PlayloopTrace` is the package's first Inspector-facing MonoBehaviour, on
+purpose** (`Add Component → Playloop → Trace`: fields `target`, `roomId`,
+`plane`, `facingFromVelocity`; call `Attach(client)`). Every other MonoBehaviour
+in the SDK is an internal hidden helper; do not make this one hidden or
+internal to match them. It feeds position and facing only; wire `SetInput`
+from the game's own input code.
+
+To verify the whole path, import the **Trace Fixture** sample (a tiny scripted
+game that walks a known route and dies at (50, 5) in `vault`), keep
+`SendInEditor` on, press Play, and open the session on the dashboard.
+
 ## Tester linking (Tester Keys)
 
 If the studio distributes beta keys via Tester Keys, correlate each redeemed key
@@ -238,6 +277,10 @@ When wiring this SDK into a project, an agent should:
 5. **Don't set a game id.** There is no `GameId`/`GameSlug` option: experiments,
    tester linking, and per-event config all resolve the game from the ingest key.
 6. **Never embed the Management key** in the game; only the ingest key ships.
+7. **Feed the Trace from the movement code**, not from input handlers:
+   `SetPosition` + `SetRoom` every frame (or the `PlayloopTrace` component),
+   `SetInput` with the game's abstract action mask, `End(...)` on death or
+   level complete. Never pass a key or button name anywhere near it.
 
 ## Where to go next
 

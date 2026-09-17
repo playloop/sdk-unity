@@ -186,6 +186,48 @@ The accumulator rides every heartbeat AND fires once as a `session_summary` even
 | `State.FlushSessionEnd()` | Force-flush the `session_summary` row now. Idempotent: already-flushed accumulators no-op until `ClearState()` resets. |
 | `State.ClearState()` | Drop the buffer and reset the once-only flush guard. Useful for "new game" mid-session. |
 
+## Trace
+
+A Trace is sampled session state: where the player is, which room they are in, which abstract actions are held and which way they are moving, plus up to a few named entities, 5 to 20 times a second. Playloop draws it on the session's Playback as a ghost walking the route, and rolls every session's path up per level with a falloff heat of where sessions ended. You push the latest values; the SDK owns the clock, the packing, and the cadence (one chunk every five seconds, riding the normal telemetry batch as a `trace_chunk` event).
+
+```csharp
+// Once, at startup. Bit i of the action mask is labels[i]; up to 16 labels.
+client.Trace.DefineActions("move", "jump", "attack");
+
+// When the player changes rooms. Bounds are optional and frame the room on Playback.
+client.Trace.SetRoom("crypt", new TraceBounds(20, 0, 40, 10));
+
+// Every frame, from your own movement code.
+client.Trace.SetPosition(player.x, player.y, facingDeg);      // facing -1 = unknown
+client.Trace.SetInput(actionBits, moveAxis.x, moveAxis.y);    // the abstract mask + move vector
+client.Trace.SetEntity("key", key.x, key.y);                  // named entities, up to 8
+client.Trace.ClearEntity("key");                              // when one despawns
+
+// Game-side gates: a cutscene, a menu, a bot run.
+client.Trace.Pause();  client.Trace.Resume();
+
+// How the run ended. Quit is sent for you when the session ends.
+client.Trace.End(TraceEndReason.Death);
+```
+
+Sampling runs on its own driver once you call `Telemetry.AutoBatch()`; there is nothing to tick. The `PlayloopTrace` component (**Add Component → Playloop → Trace**) feeds a Transform's position and heading for you: set `roomId`, pick the plane (`XY` for side-on and 2D, `XZ` for top-down and 3D), and hand it your client with `Attach(client)`. Action bits and axes stay your call, because only the game knows its verbs.
+
+`Trace.Status` says why nothing is flowing: `Active`, `PausedByGame`, `OffByEnvironment`, `OffByOption`, `OffByConfig` (the dashboard's per-event config ignores `trace_chunk`, which is the server-side off switch), `Disabled` (no ingest key), `BudgetExhausted`, or `Ended`. When the Trace is off for the session, the SDK sends one `trace_state` event with the reason so the session page can say so instead of showing an empty frame.
+
+**Where it is on.** `TraceOptions.Mode` defaults to `Auto`: on everywhere except a `"production"` environment (see [Per-game environments](#per-game-environments)), so development, playtest and demo builds carry it and a shipping release does not. Set `Mode = On` to keep it in production once you have disclosed it, or `Off` to turn it off everywhere. The environment is a slug your build sets, so this default is the SDK's, not the server's. With `SendInEditor` off, editor runs send nothing, like every other event.
+
+**Budget.** Each session may send up to `MaxBytesPerSession` (default 2 MB) of Trace data, about 90 minutes at 10 Hz with no entities, or about 10 minutes at 20 Hz with 8 moving entities. At the budget the SDK sends a final chunk marked `budget` and stops; Playback shows where the Trace ended and why, rather than pretending the session did. Lower `Hz` or track fewer entities for long sessions.
+
+### What the Trace sends
+
+Every string on the wire is a label you declared (an action, a room id, an entity name), each a lowercase slug with a fixed cap; every sample is eight numbers. There is no overload that takes a key, a button, or free text, so keystrokes cannot reach the wire by construction. World coordinates only, rounded to two decimals; integer degrees; nothing is written to disk on the player's machine. It follows the same opt-out handling as the rest of telemetry.
+
+The wording Playloop's own privacy notice uses, which you can quote or link from your store page's privacy field:
+
+> sampled gameplay state from games that enable Trace: player position and facing, the current room or level id, abstract action flags and movement axes, and up to a small number of named in-game object positions, 10 to 20 times a second. Never keystrokes, text, screen, audio, or camera.
+
+Link that item from your Steam privacy field (or the equivalent on your store) when you ship a build with the Trace on, the same way you disclose the rest of your telemetry.
+
 ## Discord ingest
 
 Relay a Discord channel (optionally a thread) into a playtest session so the conversation folds into Playloop alongside your telemetry. The same surface exists in every Playloop SDK; in Unity it lives on `client.Discord`:
@@ -276,6 +318,7 @@ PlayloopClient.Current.InstallCrashHandler();
 | `RetryBaseMs` | `int` | `500` | Base exponential-backoff delay in milliseconds. |
 | `RetryMaxMs` | `int` | `5000` | Maximum exponential-backoff delay (cap) in milliseconds. |
 | `AutoShutdownOnQuit` | `bool` | `true` | Set false to opt out of the `Application.quitting` hook. |
+| `Trace` | `TraceOptions` | `Mode = Auto`, `Hz = 10`, `Plane = XY`, `MaxEntities = 8`, `MaxBytesPerSession = 2 MB` | Sampled session state for Playback. `Auto` is on everywhere except a `"production"` environment; `On` forces it on, `Off` turns it off. See [Trace](#trace). |
 
 ### Safe to construct (never-raise)
 
@@ -599,7 +642,7 @@ else
 - **Unknown experiment.** Calling `VariantAsync` for an id the SDK hasn't seen triggers exactly one re-fetch (in case you just created the experiment), then caches the answer. A brand-new experiment created mid-session is picked up on that re-fetch.
 - **Offline-safe.** If the network is down, a previously-cached variant still answers. If the very first fetch fails, `VariantAsync` returns `null`.
 
-The variant the player saw is tagged onto the session automatically: the first telemetry flush carries the assignments, and the dashboard's experiment detail page counts each session under its variant. The server re-checks every tag against its own answer before recording it, so the dashboard numbers always reflect the real assignment.
+The variant the player saw is tagged onto the session automatically: the first telemetry flush carries the assignments, and the dashboard's experiment detail page counts each session under its variant. The server re-checks every tag against its own answer before storing it, so the dashboard numbers always reflect the real assignment.
 
 ### Synchronous read (hot path)
 

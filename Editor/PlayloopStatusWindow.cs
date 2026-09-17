@@ -116,6 +116,7 @@ namespace Playloop.Editor
             var so = new SerializedObject(settings);
             BuildConnection(scroll.contentContainer, settings, so);
             BuildAutoInstrument(scroll.contentContainer, so);
+            BuildTrace(scroll.contentContainer, so);
             BuildQuickLinks(scroll.contentContainer, settings);
 
             // Tick the "Last verified 14s ago" label + verifying spinner state
@@ -435,6 +436,57 @@ namespace Playloop.Editor
             note.style.whiteSpace = WhiteSpace.Normal;
             note.style.marginTop = 6;
             card.Add(note);
+        }
+
+        // ─────────────────── Trace ───────────────────
+
+        private void BuildTrace(VisualElement parent, SerializedObject so)
+        {
+            var block = so.FindProperty("trace");
+            if (block == null) return;
+
+            SectionHeading(parent, "Trace");
+            var card = Card();
+            parent.Add(card);
+
+            AddEnumDropdown(card, block, so, "mode", "Mode", new List<string> { "Auto", "On", "Off" });
+            AddEnumDropdown(card, block, so, "plane", "Plane", new List<string> { "XY", "XZ" });
+
+            var hz = block.FindPropertyRelative("hz");
+            var ents = block.FindPropertyRelative("maxEntities");
+            var budget = block.FindPropertyRelative("maxBytesPerSession");
+            string budgetMb = budget != null ? (budget.intValue / (1024f * 1024f)).ToString("0.#") : "2";
+            var values = MutedLabel(
+                $"{(hz != null ? hz.intValue : 10)} Hz, up to {(ents != null ? ents.intValue : 8)} named entities, {budgetMb} MB per session. Edit these on the settings asset.");
+            values.style.whiteSpace = WhiteSpace.Normal;
+            values.style.marginTop = 2;
+            card.Add(values);
+
+            var note = MutedLabel(
+                "Auto samples everywhere except a production environment. The Trace carries player position and facing, the room id, action bits and movement axes. Never keys, text, screen, audio or camera.");
+            note.style.whiteSpace = WhiteSpace.Normal;
+            note.style.marginTop = 6;
+            card.Add(note);
+        }
+
+        private void AddEnumDropdown(VisualElement parent, SerializedProperty block, SerializedObject so, string child, string label, List<string> choices)
+        {
+            var prop = block.FindPropertyRelative(child);
+            if (prop == null) return;
+
+            var row = FieldRow(parent, label);
+            int initial = Math.Max(0, Math.Min(choices.Count - 1, prop.enumValueIndex));
+            var dropdown = new DropdownField(choices, initial);
+            StyleDropdown(dropdown);
+            dropdown.style.flexGrow = 1;
+            dropdown.RegisterValueChangedCallback(evt =>
+            {
+                int idx = choices.IndexOf(evt.newValue);
+                if (idx < 0) return;
+                prop.enumValueIndex = idx;
+                so.ApplyModifiedProperties();
+            });
+            row.Add(dropdown);
         }
 
         private void AddToggle(VisualElement parent, SerializedProperty block, SerializedObject so, string child, string label)

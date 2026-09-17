@@ -4,7 +4,7 @@ using Newtonsoft.Json;
 
 namespace Playloop.Sessions
 {
-    /// <summary>One insight surfaced by Playloop from a playtest recording.</summary>
+    /// <summary>One insight surfaced by Playloop from a playtest session.</summary>
     public sealed class Insight
     {
         [JsonProperty("id")] public string Id { get; set; } = "";

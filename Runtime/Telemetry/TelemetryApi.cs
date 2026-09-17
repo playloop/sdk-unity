@@ -85,7 +85,15 @@ namespace Playloop.Telemetry
         // Hidden GameObject hosting the auto-instrumentation MonoBehaviour
         // (scene/error/idle/fps/memory). Same lifecycle as the focus tracker.
         private UnityEngine.GameObject? _autoInstrumentGo;
+
+        // Hidden GameObject hosting the Trace driver, which pumps
+        // Trace.Tick from Update. Same lifecycle as the focus tracker.
+        private UnityEngine.GameObject? _traceDriverGo;
 #endif
+
+        // The client's Trace, attached once at construction so the session
+        // end can close it and the final flush can count its chunks.
+        private Playloop.Trace.TraceApi? _trace;
 
         // Captured at construction so AutoBatch() can spawn the
         // AutoInstrument MonoBehaviour with the same flag set the consumer
@@ -129,6 +137,26 @@ namespace Playloop.Telemetry
         public void SetExperimentTagsProvider(Func<IReadOnlyDictionary<string, string>>? provider)
         {
             _experimentTagsProvider = provider;
+        }
+
+        /// <summary>
+        /// Attach the client's Trace. Wired once by <see cref="PlayloopClient"/>
+        /// so <see cref="EndSessionAsync"/> closes it before the final flush and
+        /// <see cref="AutoBatch"/> spawns its driver.
+        /// </summary>
+        internal void AttachTrace(Playloop.Trace.TraceApi trace)
+        {
+            _trace = trace;
+        }
+
+        /// <summary>
+        /// True when the per-event config says to drop this event at the SDK.
+        /// False until the config settles.
+        /// </summary>
+        internal bool IsEventIgnored(string name)
+        {
+            var flags = _eventConfigHooks?.Lookup(name);
+            return flags != null && flags.SdkIgnore;
         }
 
         internal TelemetryApi(Http.HttpClient http, int flushIntervalMs, int maxBufferSize, string? deviceId = null)
@@ -267,6 +295,12 @@ namespace Playloop.Telemetry
                 _endRequested = true;
             }
 
+            // Close the Trace first so its final chunk rides the same flush
+            // that carries sessionEnded. Idempotent: a game that already
+            // called End(Death) or End(LevelComplete) keeps that reason.
+            try { _trace?.End(Playloop.Trace.TraceEndReason.Quit); }
+            catch { /* the Trace must never block the session end */ }
+
             try
             {
                 await FlushAsync(ct).ConfigureAwait(Playloop.PlAwait.Continue);
@@ -286,6 +320,8 @@ namespace Playloop.Telemetry
                     _endRequested = false;
                     _sessionActive = false;
                 }
+                try { _trace?.ResetForNewSession(); }
+                catch { /* best effort */ }
             }
         }
 
@@ -312,6 +348,14 @@ namespace Playloop.Telemetry
         /// </para>
         /// </summary>
         public void Track(string name, IReadOnlyDictionary<string, object>? data = null)
+            => Track(name, data, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+
+        /// <summary>
+        /// <see cref="Track(string, IReadOnlyDictionary{string, object})"/> with
+        /// an explicit event timestamp. The Trace uses it so a chunk's event
+        /// time is the chunk's own <c>t0</c>, the wall clock of its first sample.
+        /// </summary>
+        internal void Track(string name, IReadOnlyDictionary<string, object>? data, long timestampMs)
         {
             if (string.IsNullOrEmpty(name))
             {
@@ -339,7 +383,7 @@ namespace Playloop.Telemetry
                 Id = GenerateEventId(),
                 Name = name,
                 Data = data,
-                Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                Timestamp = timestampMs,
             };
 
             lock (_bufferLock)
@@ -413,7 +457,21 @@ namespace Playloop.Telemetry
                 if (!string.IsNullOrEmpty(sessionId)) body["sessionId"] = sessionId!;
                 if (!string.IsNullOrEmpty(deviceId)) body["deviceId"] = deviceId!;
                 if (metadata != null) body["sessionMetadata"] = metadata;
-                if (sessionEnded) body["sessionEnded"] = true;
+                if (sessionEnded)
+                {
+                    body["sessionEnded"] = true;
+                    // The final flush says how many Trace chunks the session
+                    // wrote, so Playback can tell a hard stop from a lost chunk.
+                    int traceChunks = _trace?.ChunkCount ?? 0;
+                    if (traceChunks > 0)
+                    {
+                        var stamped = metadata == null
+                            ? new Dictionary<string, object>()
+                            : new Dictionary<string, object>(metadata);
+                        stamped["traceChunks"] = traceChunks;
+                        body["sessionMetadata"] = stamped;
+                    }
+                }
                 // Cross-game identity. Only attached on the
                 // session-create flush (sessionId == null at the build
                 // time of this body). Vendor id is auto-detected
@@ -518,6 +576,12 @@ namespace Playloop.Telemetry
             {
                 EnsureAutoInstrumentSpawned();
             }
+
+#if !UNITY_WEBGL || UNITY_EDITOR
+            // Spawn the Trace driver on the same path. On a WebGL player the
+            // main-loop driver the client spawned already pumps the tick.
+            EnsureTraceDriverSpawned();
+#endif
 #endif
 
             // Capture Unity's main-thread SynchronizationContext at AutoBatch()
@@ -609,6 +673,7 @@ namespace Playloop.Telemetry
             // UnityEngine.Object.Destroy queues on Unity's main thread.
             TeardownFocusTracker();
             TeardownAutoInstrument();
+            TeardownTraceDriver();
 #endif
 
             if (cts == null || task == null) return;
@@ -707,6 +772,47 @@ namespace Playloop.Telemetry
                 // Best effort. Destroy can throw mid-teardown.
             }
         }
+
+        private void EnsureTraceDriverSpawned()
+        {
+            if (_traceDriverGo != null) return;
+            var trace = _trace;
+            if (trace == null || trace.Status == Playloop.Trace.TraceStatus.Disabled) return;
+
+            try
+            {
+                var go = new UnityEngine.GameObject("[Playloop] Trace")
+                {
+                    hideFlags = UnityEngine.HideFlags.HideAndDontSave,
+                };
+                UnityEngine.Object.DontDestroyOnLoad(go);
+                var driver = go.AddComponent<Playloop.Trace.PlayloopTraceDriver>();
+                driver.Attach(trace);
+                _traceDriverGo = go;
+            }
+            catch (Exception e)
+            {
+                UnityEngine.Debug.LogWarning(
+                    $"[Playloop] Failed to spawn the Trace driver: {e.Message}. " +
+                    "No Trace samples will be taken this session.");
+                _traceDriverGo = null;
+            }
+        }
+
+        private void TeardownTraceDriver()
+        {
+            var go = _traceDriverGo;
+            _traceDriverGo = null;
+            if (go == null) return;
+            try
+            {
+                UnityEngine.Object.Destroy(go);
+            }
+            catch
+            {
+                // Best effort. Destroy can throw mid-teardown.
+            }
+        }
 #endif
 
         /// <summary>
@@ -760,6 +866,7 @@ namespace Playloop.Telemetry
 #if UNITY_2018_1_OR_NEWER && !PLAYLOOP_DOTNET_STANDALONE
             TeardownFocusTracker();
             TeardownAutoInstrument();
+            TeardownTraceDriver();
 #endif
             _disposed = true;   // before disposing the lock, so a late FlushAsync bails
             _flushLock.Dispose();

@@ -32,6 +32,7 @@ namespace Playloop.Telemetry
         // it in Dispose() before the client/telemetry go away.
         private TelemetryApi? _telemetry;
         private HeartbeatEmitter? _heartbeat;
+        private Playloop.Trace.TraceApi? _trace;
 
         private float _flushSec = 5f;
         private float _heartbeatSec = 60f;   // <= 0 disables heartbeats
@@ -39,10 +40,11 @@ namespace Playloop.Telemetry
         private float _nextHeartbeat;
         private bool _flushInFlight;          // one flush in flight at a time
 
-        internal void Attach(TelemetryApi telemetry, HeartbeatEmitter heartbeat, float flushSec, float heartbeatSec)
+        internal void Attach(TelemetryApi telemetry, HeartbeatEmitter heartbeat, Playloop.Trace.TraceApi? trace, float flushSec, float heartbeatSec)
         {
             _telemetry = telemetry;
             _heartbeat = heartbeat;
+            _trace = trace;
             if (flushSec > 0f) _flushSec = flushSec;
             _heartbeatSec = heartbeatSec;
             // First heartbeat fires promptly so the session reads as live well
@@ -54,6 +56,14 @@ namespace Playloop.Telemetry
         private void Update()
         {
             float t = Time.unscaledTime;
+
+            // The Trace samples on its own accumulator; one tick per frame.
+            var trace = _trace;
+            if (trace != null)
+            {
+                try { trace.Tick(Time.unscaledTimeAsDouble); }
+                catch (Exception e) { Debug.LogWarning($"[Playloop] WebGL Trace tick failed: {e.Message}"); }
+            }
 
             if (_heartbeat != null && _heartbeatSec > 0f && t >= _nextHeartbeat)
             {
@@ -86,6 +96,7 @@ namespace Playloop.Telemetry
         {
             _telemetry = null;
             _heartbeat = null;
+            _trace = null;
         }
     }
 }

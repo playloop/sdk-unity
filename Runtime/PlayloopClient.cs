@@ -12,6 +12,7 @@ using Playloop.Playtest;
 using Playloop.Resolve;
 using Playloop.Sessions;
 using Playloop.Telemetry;
+using Playloop.Trace;
 
 namespace Playloop
 {
@@ -172,6 +173,16 @@ namespace Playloop
         /// the full surface.
         /// </summary>
         public StateApi State { get; }
+
+        /// <summary>
+        /// Sampled session state for Playback. Push the player's position,
+        /// room, action bits and axes through <see cref="TraceApi"/>; the SDK
+        /// samples them 5 to 20 times a second and ships one chunk every five
+        /// seconds as a <c>trace_chunk</c> event. On by default outside
+        /// <c>"production"</c>; see <see cref="TraceOptions"/>.
+        /// </summary>
+        public TraceApi Trace { get; }
+
         /// <summary>
         /// SDK-owned heartbeat emitter. Fires one <c>session_heartbeat</c> event
         /// every <see cref="PlayloopOptions.HeartbeatSec"/> seconds
@@ -279,6 +290,8 @@ namespace Playloop
             BugReportForm = new BugReportForm(BugReports, EventConfig);
 #endif
             State = new StateApi(Telemetry);
+            Trace = new TraceApi(Telemetry, options.Trace, resolvedEnvironment, enabled: _enabled);
+            Telemetry.AttachTrace(Trace);
             Heartbeat = new HeartbeatEmitter(Telemetry, State, ResolveHeartbeatSec(options.HeartbeatSec));
             Experiments = new ExperimentsApi(http, DeviceId, enabled: _enabled);
             _environment = resolvedEnvironment;
@@ -401,7 +414,7 @@ namespace Playloop
                 var driver = go.AddComponent<Telemetry.PlayloopWebGLDriver>();
                 float flushSec = options.TelemetryFlushIntervalMs / 1000f;
                 float heartbeatSec = (float)ResolveHeartbeatSec(options.HeartbeatSec);
-                driver.Attach(Telemetry, Heartbeat, flushSec, heartbeatSec);
+                driver.Attach(Telemetry, Heartbeat, Trace, flushSec, heartbeatSec);
                 _webGLDriverGo = go;
             }
             catch (Exception e)
