@@ -176,6 +176,7 @@ namespace Playloop.Tests
             var chunks = new List<Dictionary<string, object>>();
             var sampler = new TraceSampler(20, TracePlane.XY, 8, TraceOptions.DefaultMaxBytesPerSession, (c, t0) => chunks.Add(c));
             sampler.DefineActions(new[] { "move" });
+            sampler.SetPosition(0, 0, -1); // the first state call starts sampling
             for (int ms = 0; ms < 12000; ms += 50) sampler.Tick(ms / 1000.0, Wall + ms);
             Assert.AreEqual(2, chunks.Count, "two full chunks of 100 samples at 20 Hz; the third is still open");
             Assert.AreEqual(100, ((object[])chunks[0]["s"]).Length);
@@ -195,6 +196,7 @@ namespace Playloop.Tests
         {
             var chunks = new List<Dictionary<string, object>>();
             var sampler = new TraceSampler(10, TracePlane.XY, 8, maxBytesPerSession: 2000, (c, t0) => chunks.Add(c));
+            sampler.SetPosition(0, 0, -1); // the first state call starts sampling
             for (int ms = 0; ms < 30000; ms += 100) sampler.Tick(ms / 1000.0, Wall + ms);
             Assert.IsTrue(sampler.BudgetExhausted);
             Assert.AreEqual(2, chunks.Count, "the second chunk crosses a 2000-byte budget and is the last");
@@ -207,7 +209,8 @@ namespace Playloop.Tests
         public void Budget_ReportsStateEvent_ThroughTheClient()
         {
             var handler = new MockHttpHandler();
-            using var client = NewClient(handler, "playtest",t => t.MaxBytesPerSession = 2000);
+            using var client = NewClient(handler, "playtest", t => t.MaxBytesPerSession = 2000);
+            client.Trace.SetPosition(0f, 0f); // the first state call starts sampling
             for (int ms = 0; ms < 30000; ms += 100) client.Trace.Tick(ms / 1000.0, Wall + ms);
             Assert.AreEqual(TraceStatus.BudgetExhausted, client.Trace.Status);
             var names = client.Telemetry.SnapshotPending().Select(e => e.Name).ToList();
@@ -222,6 +225,7 @@ namespace Playloop.Tests
         {
             var chunks = new List<Dictionary<string, object>>();
             var sampler = new TraceSampler(10, TracePlane.XY, 8, TraceOptions.DefaultMaxBytesPerSession, (c, t0) => chunks.Add(c));
+            sampler.SetPosition(0, 0, -1); // the first state call starts sampling
             sampler.Tick(0.0, Wall);
             sampler.Pause();
             for (int ms = 100; ms < 1000; ms += 100) sampler.Tick(ms / 1000.0, Wall + ms);
@@ -291,6 +295,98 @@ namespace Playloop.Tests
             Assert.AreEqual(50L, end["x"]);
             Assert.AreEqual(0, end["r"]);
             Assert.AreEqual("vault", ((Dictionary<string, object>)((object[])last["rooms"])[0])["id"]);
+        }
+
+        [Test]
+        public void Sampler_IdlesUntilTheFirstStateCall()
+        {
+            var chunks = new List<Dictionary<string, object>>();
+            var sampler = new TraceSampler(10, TracePlane.XY, 8, TraceOptions.DefaultMaxBytesPerSession, (c, t0) => chunks.Add(c));
+            sampler.DefineActions(new[] { "move" }); // a declaration, not state
+
+            Assert.IsFalse(sampler.IsWired);
+            for (int ms = 0; ms < 12000; ms += 100) sampler.Tick(ms / 1000.0, Wall + ms);
+            Assert.AreEqual(0, chunks.Count, "the driver ticks from the first frame; an unwired game sends nothing");
+            sampler.End(TraceEndReason.Quit);
+            Assert.AreEqual(0, chunks.Count, "no end-only chunk either");
+
+            // A fresh sampler: idle ticks, then the first state call. The clock
+            // anchors on the next tick, so that tick is sample zero at dt 0.
+            chunks.Clear();
+            sampler = new TraceSampler(10, TracePlane.XY, 8, TraceOptions.DefaultMaxBytesPerSession, (c, t0) => chunks.Add(c));
+            for (int ms = 0; ms < 3000; ms += 100) sampler.Tick(ms / 1000.0, Wall + ms);
+            sampler.SetPosition(1, 2, 0);
+            Assert.IsTrue(sampler.IsWired);
+            for (int ms = 3000; ms <= 3500; ms += 100) sampler.Tick(ms / 1000.0, Wall + ms);
+            sampler.End(TraceEndReason.Quit);
+
+            Assert.AreEqual(1, chunks.Count);
+            Assert.AreEqual(Wall + 3000, chunks[0]["t0"], "the chunk starts at the first tick after the state call");
+            var rows = ((object[])chunks[0]["s"]).Cast<object[]>().ToList();
+            CollectionAssert.AreEqual(new long[] { 0, 100, 200, 300, 400, 500 }, rows.Select(r => (long)r[0]).ToArray());
+            Assert.AreEqual(1L, rows[0][1]);
+            Assert.AreEqual(2L, rows[0][2]);
+        }
+
+        [Test]
+        public void Unwired_SendsNoChunkAndNoState_ThroughTheClient()
+        {
+            var handler = MockHttpHandler.ReturnsJson("{\"sessionId\":\"s1\"}");
+            using var client = NewClient(handler);
+            client.Telemetry.StartSession();
+
+            for (int ms = 0; ms < 12000; ms += 100) client.Trace.Tick(ms / 1000.0, Wall + ms);
+
+            Assert.AreEqual(TraceStatus.Active, client.Trace.Status, "the Trace is on; it is waiting for state");
+            var pending = client.Telemetry.SnapshotPending().Select(e => e.Name).ToList();
+            Assert.IsFalse(pending.Any(n => n.StartsWith("trace_", StringComparison.Ordinal)), "nothing trace-shaped is buffered");
+
+            client.Telemetry.EndSessionAsync().GetAwaiter().GetResult();
+
+            foreach (var call in handler.Calls.Where(c => c.Url.EndsWith("/api/telemetry", StringComparison.Ordinal)))
+            {
+                var body = JObject.Parse(Encoding.UTF8.GetString(call.JsonBody!));
+                var names = (body["events"] ?? new JArray()).Select(e => e["name"]!.Value<string>()).ToList();
+                Assert.IsFalse(names.Any(n => n!.StartsWith("trace_", StringComparison.Ordinal)), "no trace_chunk and no trace_state on the wire");
+                Assert.IsNull(body["sessionMetadata"]?["traceChunks"], "no trace count is stamped for an unwired game");
+            }
+        }
+
+        [Test]
+        public void Entities_SetAfterClear_BeforeTheNextSample_StaysAlive()
+        {
+            var chunks = new List<Dictionary<string, object>>();
+            var sampler = new TraceSampler(10, TracePlane.XY, 8, TraceOptions.DefaultMaxBytesPerSession, (c, t0) => chunks.Add(c));
+
+            // "key" is sampled once, cleared, then set again before the next
+            // sample. "gem" is cleared and set again before it was ever
+            // sampled. "bat" is cleared and stays cleared.
+            sampler.SetEntity("key", 1, 1);
+            sampler.SetEntity("bat", 7, 7);
+            sampler.Tick(0.0, Wall);
+
+            sampler.ClearEntity("key");
+            sampler.SetEntity("key", 2, 2);
+            sampler.SetEntity("gem", 1, 1);
+            sampler.ClearEntity("gem");
+            sampler.SetEntity("gem", 3, 3);
+            sampler.ClearEntity("bat");
+            sampler.Tick(0.1, Wall + 100);
+            sampler.End(TraceEndReason.Quit);
+
+            Assert.AreEqual(1, chunks.Count);
+            CollectionAssert.AreEqual(new[] { "key", "bat", "gem" }, (string[])chunks[0]["ents"]);
+            var rows = ((object[])chunks[0]["e"]).Cast<object?[]>().ToList();
+
+            // Sample 0: key at (1, 1), bat at (7, 7).
+            CollectionAssert.AreEqual(new object?[] { 0, 0, 1L, 1L }, rows[0]);
+            CollectionAssert.AreEqual(new object?[] { 0, 1, 7L, 7L }, rows[1]);
+            // Sample 1: key moved to (2, 2) and is still alive, bat despawns
+            // with a null position, gem appears at its final (3, 3).
+            CollectionAssert.AreEqual(new object?[] { 1, 0, 2L, 2L }, rows[2]);
+            CollectionAssert.AreEqual(new object?[] { 1, 1, null, null }, rows[3]);
+            CollectionAssert.AreEqual(new object?[] { 1, 2, 3L, 3L }, rows[4]);
+            Assert.AreEqual(5, rows.Count, "no despawn row for a name that was set again");
         }
     }
 }

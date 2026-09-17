@@ -13,6 +13,14 @@ namespace Playloop.Trace
     /// memory and never writes to disk.
     ///
     /// <para>
+    /// Nothing is sampled until the game pushes state for the first time
+    /// (<see cref="SetPosition"/>, <see cref="SetRoom"/>, <see cref="SetInput"/>
+    /// or <see cref="SetEntity"/>). The driver ticks from the first frame, so
+    /// without this gate a game that never wired the Trace would still send
+    /// chunks of zeros every five seconds.
+    /// </para>
+    ///
+    /// <para>
     /// Chunk document (format version 1): <c>v</c>, <c>seq</c>, <c>t0</c>
     /// (unix ms of the chunk's first sample), <c>hz</c>, <c>plane</c>,
     /// <c>acts</c> (first chunk and after every redefine), per-chunk
@@ -95,6 +103,7 @@ namespace Playloop.Trace
         private long _lastSampleWallMs;
         private string? _lastRoomId;
 
+        private bool _wired;
         private bool _hasTicked;
         private double _nextSampleSec;
         private int _seq;
@@ -127,6 +136,12 @@ namespace Playloop.Trace
         public bool IsEnded => _ended;
         public bool BudgetExhausted => _budgetExhausted;
 
+        /// <summary>
+        /// True once the game has pushed state at least once. Until then
+        /// <see cref="Tick"/> samples nothing.
+        /// </summary>
+        public bool IsWired => _wired;
+
         // ───────────────────────── setters ─────────────────────────
 
         public void DefineActions(string[] labels)
@@ -137,6 +152,7 @@ namespace Playloop.Trace
 
         public void SetRoom(string roomId, TraceBounds? bounds)
         {
+            _wired = true;
             _roomId = roomId;
             if (bounds.HasValue)
             {
@@ -147,6 +163,7 @@ namespace Playloop.Trace
 
         public void SetPosition(double x, double y, int facing)
         {
+            _wired = true;
             _x = x;
             _y = y;
             _facing = facing;
@@ -154,6 +171,7 @@ namespace Playloop.Trace
 
         public void SetInput(int actionBits, double axisX, double axisY)
         {
+            _wired = true;
             _bits = actionBits & 0xFFFF;
             _ax = Clamp1(axisX);
             _ay = Clamp1(axisY);
@@ -161,6 +179,7 @@ namespace Playloop.Trace
 
         public void SetEntity(string name, double x, double y)
         {
+            _wired = true;
             var en = Find(name);
             if (en == null)
             {
@@ -177,6 +196,9 @@ namespace Playloop.Trace
                 en = new Entity { Name = name };
                 _entities.Add(en);
             }
+            // A name cleared since the last sample is alive again: the clear
+            // and the set cancel out, and the new position is what gets sampled.
+            en.Despawn = false;
             en.X = x;
             en.Y = y;
         }
@@ -196,10 +218,12 @@ namespace Playloop.Trace
         /// <summary>
         /// Advance the sampler. Emits at most one sample per call: a frame
         /// longer than one period shows up as a large <c>dt</c>, never as
-        /// back-filled rows.
+        /// back-filled rows. Idle until the first state call; the clock is
+        /// anchored on the first tick after it, so that tick is sample zero.
         /// </summary>
         public void Tick(double unscaledSec, long nowUnixMs)
         {
+            if (!_wired) return;
             if (_ended || _budgetExhausted || _paused) return;
             if (double.IsNaN(unscaledSec) || double.IsInfinity(unscaledSec)) return;
 

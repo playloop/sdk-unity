@@ -2,7 +2,7 @@
 
 # Trace fixture
 
-A tiny scripted game that walks a known path so you can check the Trace end to end: the SDK samples it, the session lands on the dashboard, and Playback should draw exactly this route.
+A tiny scripted game that walks a known path so you can check the Trace end to end: the SDK samples it and the session lands on the dashboard carrying exactly this route.
 
 ## What it does
 
@@ -25,7 +25,7 @@ Expected wire: three `trace_chunk` events (seq 0, 1, 2) at 10 Hz on plane `xy`, 
 2. Add an empty GameObject and drop `PlayloopTraceFixture.cs` on it.
 3. Set **Api Key** to your game's ingest key. Leave **Send In Editor** on and **Environment** at `dev`.
 4. Press Play. After about 13 seconds the console logs that the session ended.
-5. Open the session on the dashboard. Playback draws the route through the three rooms with the end marker at (50, 5) in `vault`, and the level view puts the falloff on that spot.
+5. Open the session on the dashboard. It carries three `trace_chunk` events (seq 0, 1, 2) whose last one ends with reason `death` at (50, 5) in `vault`. Once Playback's route view is available it draws that route through the three rooms with the end marker on that spot, and the per-level view puts the end there too.
 
 ## Reading the result
 

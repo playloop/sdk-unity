@@ -122,9 +122,11 @@ client.State.IncrementState(new Dictionary<string, object?> { { "kills_total", 1
 ## Trace (sampled session state for Playback)
 
 `client.Trace` samples where the player is 5 to 20 times a second and ships it as
-`trace_chunk` events so Playback can draw the route and the per-level view can
-show where sessions ended. Push the latest values; the SDK samples on its own
-driver once `AutoBatch()` runs. Nothing takes an engine type:
+`trace_chunk` events. On the Playloop side those become the route the player
+walked and, per level, where sessions ended, once those views are available.
+Push the latest values; the SDK samples on its own driver once `AutoBatch()`
+runs, starting with the first state call (an unwired game sends nothing).
+Nothing takes an engine type:
 
 ```csharp
 using Playloop.Trace;
