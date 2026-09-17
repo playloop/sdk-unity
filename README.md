@@ -188,13 +188,13 @@ The accumulator rides every heartbeat AND fires once as a `session_summary` even
 
 ## Trace
 
-A Trace is sampled session state: where the player is, which room they are in, which abstract actions are held and which way they are moving, plus up to a few named entities, 5 to 20 times a second. Playloop draws it on the session's Playback as a ghost walking the route, and rolls every session's path up per level with a falloff heat of where sessions ended. You push the latest values; the SDK owns the clock, the packing, and the cadence (one chunk every five seconds, riding the normal telemetry batch as a `trace_chunk` event).
+A Trace is sampled session state: where the player is, which room they are in, which abstract actions are held and which way they are moving, plus up to a few named entities, 5 to 20 times a second. You push the latest values; the SDK owns the clock, the packing, and the cadence (one chunk every five seconds, riding the normal telemetry batch as a `trace_chunk` event). That is what ships today. On the Playloop side, Playback reads those chunks as the route the player walked through the rooms, and the per-level view as every session's path with where sessions ended, once those views are available.
 
 ```csharp
 // Once, at startup. Bit i of the action mask is labels[i]; up to 16 labels.
 client.Trace.DefineActions("move", "jump", "attack");
 
-// When the player changes rooms. Bounds are optional and frame the room on Playback.
+// When the player changes rooms. Bounds are optional and ride the chunk so Playback can frame the room.
 client.Trace.SetRoom("crypt", new TraceBounds(20, 0, 40, 10));
 
 // Every frame, from your own movement code.
@@ -210,13 +210,13 @@ client.Trace.Pause();  client.Trace.Resume();
 client.Trace.End(TraceEndReason.Death);
 ```
 
-Sampling runs on its own driver once you call `Telemetry.AutoBatch()`; there is nothing to tick. The `PlayloopTrace` component (**Add Component → Playloop → Trace**) feeds a Transform's position and heading for you: set `roomId`, pick the plane (`XY` for side-on and 2D, `XZ` for top-down and 3D), and hand it your client with `Attach(client)`. Action bits and axes stay your call, because only the game knows its verbs.
+Sampling runs on its own driver once you call `Telemetry.AutoBatch()`; there is nothing to tick. Nothing is sampled until your first `SetPosition`, `SetRoom`, `SetInput` or `SetEntity` call, so a game that never wires the Trace sends no `trace_chunk` and no `trace_state`. The `PlayloopTrace` component (**Add Component → Playloop → Trace**) feeds a Transform's position and heading for you: set `roomId`, pick the plane (`XY` for side-on and 2D, `XZ` for top-down and 3D), and hand it your client with `Attach(client)`. Action bits and axes stay your call, because only the game knows its verbs.
 
 `Trace.Status` says why nothing is flowing: `Active`, `PausedByGame`, `OffByEnvironment`, `OffByOption`, `OffByConfig` (the dashboard's per-event config ignores `trace_chunk`, which is the server-side off switch), `Disabled` (no ingest key), `BudgetExhausted`, or `Ended`. When the Trace is off for the session, the SDK sends one `trace_state` event with the reason so the session page can say so instead of showing an empty frame.
 
 **Where it is on.** `TraceOptions.Mode` defaults to `Auto`: on everywhere except a `"production"` environment (see [Per-game environments](#per-game-environments)), so development, playtest and demo builds carry it and a shipping release does not. Set `Mode = On` to keep it in production once you have disclosed it, or `Off` to turn it off everywhere. The environment is a slug your build sets, so this default is the SDK's, not the server's. With `SendInEditor` off, editor runs send nothing, like every other event.
 
-**Budget.** Each session may send up to `MaxBytesPerSession` (default 2 MB) of Trace data, about 90 minutes at 10 Hz with no entities, or about 10 minutes at 20 Hz with 8 moving entities. At the budget the SDK sends a final chunk marked `budget` and stops; Playback shows where the Trace ended and why, rather than pretending the session did. Lower `Hz` or track fewer entities for long sessions.
+**Budget.** Each session may send up to `MaxBytesPerSession` (default 2 MB) of Trace data, about 90 minutes at 10 Hz with no entities, or about 10 minutes at 20 Hz with 8 moving entities. At the budget the SDK sends a final chunk marked `budget` and stops; that chunk records where the Trace stopped and why, so the end of the data is never mistaken for the end of the session. Lower `Hz` or track fewer entities for long sessions.
 
 ### What the Trace sends
 

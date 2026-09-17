@@ -22,7 +22,10 @@ namespace Playloop.Trace
     /// <para>
     /// <see cref="Tick"/> is the sampling seam. Inside Unity a hidden driver
     /// calls it from <c>Update</c> once <c>Telemetry.AutoBatch()</c> runs; a
-    /// headless host calls it with its own clock.
+    /// headless host calls it with its own clock. Sampling starts with the
+    /// first state call (<see cref="SetPosition"/>, <see cref="SetRoom"/>,
+    /// <see cref="SetInput"/> or <see cref="SetEntity"/>): a game that never
+    /// wires the Trace sends no <c>trace_chunk</c> and no <c>trace_state</c>.
     /// </para>
     /// </summary>
     public sealed class TraceApi
@@ -75,10 +78,13 @@ namespace Playloop.Trace
             Hz = _sampler?.Hz ?? Math.Max(TraceOptions.MinHz, Math.Min(TraceOptions.MaxHz, options.Hz));
         }
 
-        /// <summary>Why nothing is flowing, or <see cref="TraceStatus.Active"/>.</summary>
+        /// <summary>
+        /// Why nothing is flowing, or <see cref="TraceStatus.Active"/>: the
+        /// Trace is on, and samples flow from the first state call.
+        /// </summary>
         public TraceStatus Status => _status;
 
-        /// <summary>True while samples are being taken.</summary>
+        /// <summary>True when the Trace is on for this session.</summary>
         public bool IsActive => _status == TraceStatus.Active;
 
         /// <summary>The plane <see cref="SetPosition"/> coordinates are on.</summary>
@@ -226,6 +232,10 @@ namespace Playloop.Trace
         {
             if (_sampler == null) { ReportStateOnce(); return; }
             if (_status == TraceStatus.OffByConfig || _status == TraceStatus.BudgetExhausted) return;
+
+            // An unwired game sends nothing at all, not even the config note:
+            // there is no Trace to report on until the game pushes state.
+            if (!_sampler.IsWired) return;
 
             if (_telemetry.IsEventIgnored(ChunkEventName))
             {

@@ -20,14 +20,19 @@ Sampled session state for Playback. `client.Trace` takes the player's
 position and facing, the current room (with optional bounds), an abstract
 action mask and movement axes, and up to eight named entities, samples them
 5 to 20 times a second on the SDK's own driver, and ships one chunk every
-five seconds as a `trace_chunk` event on the normal telemetry batch. Playback
-draws the route as a ghost; the per-level view shows every session's path and
-where sessions ended.
+five seconds as a `trace_chunk` event on the normal telemetry batch. On the
+Playloop side those chunks become the route the player walked and, per level,
+where sessions ended, once those views are available.
 
 - `TraceApi`: `DefineActions`, `SetRoom`, `SetPosition`, `SetInput`,
   `SetEntity` / `ClearEntity`, `Pause` / `Resume`, `End(reason)`, `Status`,
   and the sampling seam `Tick(unscaledSec)`. Every string is a validated
   slug; sample rows are eight numbers; nothing takes an engine type.
+- Sampling starts with the game's first state call (`SetPosition`,
+  `SetRoom`, `SetInput` or `SetEntity`), so a game that never wires the
+  Trace sends no `trace_chunk` and no `trace_state`. Setting an entity again
+  after clearing it, before the next sample, keeps it alive at the new
+  position.
 - `PlayloopOptions.Trace` (`TraceOptions`: `Mode` Auto/On/Off, `Hz`,
   `Plane`, `MaxEntities`, `MaxBytesPerSession`), mirrored on the settings
   asset and in the Settings window. `Auto` is on everywhere except a
