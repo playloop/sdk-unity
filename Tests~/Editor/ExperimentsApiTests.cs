@@ -95,6 +95,9 @@ namespace Playloop.Tests
                 HeartbeatSec = 0,
                 AutoShutdownOnQuit = false,
                 RetryAttempts = 1,
+                // The session-create flush is asserted on the wire, so the
+                // suppress-in-editor gate must not drain it under the editor.
+                SendInEditor = true,
             };
             return new PlayloopClient(options);
         }

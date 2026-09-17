@@ -122,6 +122,7 @@ namespace Playloop.Tests
                 BaseUrl = "https://api.test.playloop.gg",
                 Http = handler,
                 TelemetryFlushIntervalMs = 5000,
+                SendInEditor = true, // the assertion is on the wire body
                 // DeviceId omitted on purpose.
             };
             using var client = new PlayloopClient(options);

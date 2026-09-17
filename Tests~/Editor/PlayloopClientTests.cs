@@ -267,9 +267,10 @@ namespace Playloop.Tests
         public void Constructor_StampsEngineFingerprintAndIsEditor()
         {
             // #231 + #422: every session carries the cross-engine fingerprint
-            // (engine / engineVersion) and the isEditor flag. Under the headless
-            // dotnet-test build there's no UnityEngine, so engine == "unity",
-            // engineVersion is empty, and isEditor is false.
+            // (engine / engineVersion) and the isEditor flag. The engine name is
+            // always "unity"; engineVersion is a string (empty under dotnet test,
+            // where there is no UnityEngine); isEditor mirrors the host, so it is
+            // false under dotnet test and true under the editor's EditMode runner.
             var options = new PlayloopOptions
             {
                 ApiKey = "pl_ik_test",
@@ -285,15 +286,16 @@ namespace Playloop.Tests
             Assert.AreEqual("unity", data["engine"]);
             Assert.IsTrue(data.ContainsKey("engineVersion"));
             Assert.IsInstanceOf<string>(data["engineVersion"]);
-            Assert.AreEqual(false, data["isEditor"]); // headless test build
+            Assert.AreEqual(TestHost.IsEditor, data["isEditor"]);
         }
 
         [Test]
-        public void Constructor_DefaultEnvironment_AutoDerivesToProductionOutsideUnity()
+        public void Constructor_DefaultEnvironment_AutoDerivesFromBuild()
         {
             // #432: when Environment is left at the default, the SDK auto-derives
-            // it from the build. The dotnet-test build is not a development build,
-            // so it resolves to "production".
+            // it from the build: a development build (the editor, a debug player)
+            // stays "dev", a release build is promoted to "production". The
+            // dotnet-test host is not a development build; the editor host is.
             var options = new PlayloopOptions
             {
                 ApiKey = "pl_ik_test",
@@ -306,8 +308,8 @@ namespace Playloop.Tests
                 // Environment left at default "dev"
             };
             using var client = new PlayloopClient(options);
-            Assert.AreEqual("production", client.Environment);
-            Assert.AreEqual("production", client.Telemetry.SnapshotPending()[0].Data!["environment"]);
+            Assert.AreEqual(TestHost.DerivedEnvironment, client.Environment);
+            Assert.AreEqual(TestHost.DerivedEnvironment, client.Telemetry.SnapshotPending()[0].Data!["environment"]);
         }
 
         [Test]
@@ -338,6 +340,13 @@ namespace Playloop.Tests
         // to account for it. Tests that want to see session_start
         // construct PlayloopClient directly (see
         // Constructor_FiresSessionStartWithIdentityMetadata).
+        //
+        // SendInEditor is on because these tests assert on what reaches the
+        // wire. With the default (off) the suppress-in-editor gate drains the
+        // buffer and sends nothing whenever the suite runs inside the Unity
+        // editor, so every wire assertion would fail there and pass under
+        // dotnet test. The gate itself is covered by
+        // TelemetryApiTests.FlushAsync_DefaultSendInEditor_FollowsTheBuild.
         internal static PlayloopClient NewClient(MockHttpHandler handler, string apiKey = "pl_ik_test")
         {
             var options = new PlayloopOptions
@@ -349,6 +358,7 @@ namespace Playloop.Tests
                 RetryAttempts = 1,
                 HeartbeatSec = 0,
                 AutoShutdownOnQuit = false,
+                SendInEditor = true,
             };
             var client = new PlayloopClient(options);
             client.Telemetry.ClearBuffer();

@@ -430,6 +430,7 @@ namespace Playloop.Tests
                 Http = handler,
                 DeviceId = "device-from-options",
                 TelemetryFlushIntervalMs = 5000,
+                SendInEditor = true, // the assertion is on the wire body
             };
             using var client = new PlayloopClient(options);
 
@@ -438,6 +439,72 @@ namespace Playloop.Tests
 
             var firstBody = JObject.Parse(Encoding.UTF8.GetString(handler.Calls[0].JsonBody!));
             Assert.AreEqual("device-from-options", firstBody["deviceId"]!.Value<string>());
+        }
+
+        // ──────────────────── suppress-in-editor gate ────────────────────
+
+        /// <summary>
+        /// With <c>SendInEditor</c> left at its default (off), a development
+        /// build (the editor, a debug player) drains the buffer on flush and
+        /// sends nothing, so local playtesting never pollutes real session
+        /// data. A release build, and the dotnet host, send as usual. The
+        /// expectation follows the host the suite is running in.
+        /// </summary>
+        [Test]
+        public async Task FlushAsync_DefaultSendInEditor_FollowsTheBuild()
+        {
+            var handler = MockHttpHandler.ReturnsStatus(204);
+            var options = new PlayloopOptions
+            {
+                ApiKey = "pl_ik_test",
+                BaseUrl = "https://api.test.playloop.gg",
+                Http = handler,
+                TelemetryFlushIntervalMs = 5000,
+                RetryAttempts = 1,
+                HeartbeatSec = 0,
+                AutoShutdownOnQuit = false,
+                // SendInEditor left at its default (false).
+            };
+            using var client = new PlayloopClient(options);
+            client.Telemetry.ClearBuffer();
+
+            client.Telemetry.Track("a");
+            await client.Telemetry.FlushAsync();
+
+            Assert.AreEqual(0, client.Telemetry.PendingCount, "the buffer drains whether or not the flush is sent");
+            Assert.AreEqual(TestHost.IsDevelopmentBuild ? 0 : 1, handler.Calls.Count,
+                "a development build sends nothing by default; a release build or the dotnet host sends");
+        }
+
+        /// <summary>
+        /// <c>SendInEditor = true</c> lifts the gate everywhere: the flush
+        /// reaches the wire in the editor exactly as it does in a release
+        /// build. This is the switch every wire-asserting test in the suite
+        /// relies on.
+        /// </summary>
+        [Test]
+        public async Task FlushAsync_SendInEditor_SendsInEveryHost()
+        {
+            var handler = MockHttpHandler.ReturnsStatus(204);
+            var options = new PlayloopOptions
+            {
+                ApiKey = "pl_ik_test",
+                BaseUrl = "https://api.test.playloop.gg",
+                Http = handler,
+                TelemetryFlushIntervalMs = 5000,
+                RetryAttempts = 1,
+                HeartbeatSec = 0,
+                AutoShutdownOnQuit = false,
+                SendInEditor = true,
+            };
+            using var client = new PlayloopClient(options);
+            client.Telemetry.ClearBuffer();
+
+            client.Telemetry.Track("a");
+            await client.Telemetry.FlushAsync();
+
+            Assert.AreEqual(0, client.Telemetry.PendingCount);
+            Assert.AreEqual(1, handler.Calls.Count);
         }
 
         [Test]
