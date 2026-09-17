@@ -24,7 +24,7 @@ namespace Playloop.Tests
         /// <summary>
         /// Snapshot of every recorded FEATURE request. Each read returns a new
         /// list so callers can safely enumerate it even while another thread is
-        /// still recording requests through <see cref="SendAsync"/>.
+        /// still capturing requests through <see cref="SendAsync"/>.
         ///
         /// The SDK-internal game-resolve probe (<c>GET /api/telemetry/resolve</c>)
         /// is excluded here: it's plumbing the client fires at construction to

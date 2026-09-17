@@ -37,7 +37,7 @@ namespace PlayloopSamples.BasicUsage
                 var path = Path.Combine(Application.persistentDataPath, _sessionFileName);
                 if (!File.Exists(path))
                 {
-                    Debug.LogWarning($"Drop a test recording at {path} to exercise IngestAsync.");
+                    Debug.LogWarning($"Drop a test session file at {path} to exercise IngestAsync.");
                 }
                 else
                 {
