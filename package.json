@@ -40,6 +40,11 @@
       "displayName": "Bug Reports",
       "description": "Opens the SDK's default UGUI bug-report form and prints the filed report id.",
       "path": "Samples~/BugReports"
+    },
+    {
+      "displayName": "Trace Fixture",
+      "description": "A tiny scripted game that walks a known path through three rooms so you can check the Trace on Playback.",
+      "path": "Samples~/TraceFixture"
     }
   ]
 }

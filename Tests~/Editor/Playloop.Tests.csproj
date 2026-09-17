@@ -27,4 +27,10 @@
     <ProjectReference Include="..\..\Runtime\Playloop.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- The Trace fixture's route table is the one source of truth for the
+         known path; the fixture test drives it and audits the output. -->
+    <Compile Include="..\..\Samples~\TraceFixture\TraceFixtureRoute.cs" Link="Fixtures\TraceFixtureRoute.cs" />
+  </ItemGroup>
+
 </Project>
