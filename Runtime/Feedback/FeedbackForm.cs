@@ -39,6 +39,8 @@ namespace Playloop.Feedback
 
         /// <summary>Label on the dismiss button. Override to localize.</summary>
         public string CancelLabel { get; set; } = "Cancel";
+        public string YesLabel { get; set; } = "Yes";
+        public string NoLabel { get; set; } = "No";
 
         /// <summary>Label on the submit button. Override to localize.</summary>
         public string SendLabel { get; set; } = "Send";
@@ -676,7 +678,7 @@ namespace Playloop.Feedback
 
             var yesBg = AddImage(row.transform, "Yes", theme.InputBgColor);
             yesBg.AddComponent<LayoutElement>().minHeight = 36f;
-            AddCenteredLabel(yesBg.transform, "Yes", theme);
+            AddCenteredLabel(yesBg.transform, theme.YesLabel, theme);
             var yesBtn = yesBg.AddComponent<Button>();
             yesBtn.targetGraphic = yesBg.GetComponent<Image>();
             MakeHoverable(yesBg, theme);
@@ -690,7 +692,7 @@ namespace Playloop.Feedback
 
             var noBg = AddImage(row.transform, "No", theme.InputBgColor);
             noBg.AddComponent<LayoutElement>().minHeight = 36f;
-            AddCenteredLabel(noBg.transform, "No", theme);
+            AddCenteredLabel(noBg.transform, theme.NoLabel, theme);
             var noBtn = noBg.AddComponent<Button>();
             noBtn.targetGraphic = noBg.GetComponent<Image>();
             MakeHoverable(noBg, theme);
@@ -991,7 +993,7 @@ namespace Playloop.Feedback
             rt.anchorMax = new Vector2(1f, 1f);
             rt.pivot = new Vector2(1f, 1f);
             rt.anchoredPosition = new Vector2(-8f, -8f);
-            rt.sizeDelta = new Vector2(30f, 30f);
+            rt.sizeDelta = new Vector2(36f, 36f);
             var btn = go.AddComponent<Button>();
             btn.targetGraphic = go.GetComponent<Image>();
             btn.onClick.AddListener(() => onClose());
@@ -1154,7 +1156,8 @@ namespace Playloop.Feedback
             t.horizontalOverflow = HorizontalWrapMode.Wrap;
             t.verticalOverflow = VerticalWrapMode.Truncate;
             var le = go.AddComponent<LayoutElement>();
-            le.preferredHeight = isHeading ? 28f : (isHelp ? 18f : 20f);
+            // Text supplies its wrapped preferred height; this only sets the minimum.
+            le.minHeight = isHeading ? 28f : (isHelp ? 18f : 20f);
         }
 
         /// <summary>Marketing site the branding badge links to.</summary>
