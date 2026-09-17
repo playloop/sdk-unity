@@ -605,6 +605,67 @@ namespace Playloop.Tests
             Assert.IsNull(next["sessionEnded"]);
         }
 
+        /// <summary>
+        /// An event tracked WHILE the end flush is in flight belongs to the next session.
+        ///
+        /// FlushAsync snapshots and clears the buffer inside _bufferLock and then awaits the
+        /// HTTP call outside it, while Track only takes _bufferLock, so an event can land in
+        /// that window. It used to land in the live buffer, which meant a FAILED end requeued
+        /// the old session's events on top of it and the retry shipped the newcomer as part of
+        /// a session that was already over. CodeRabbit on PR #5, major.
+        /// </summary>
+        [Test]
+        public async Task Track_DuringAnEndFlush_BelongsToTheNextSession()
+        {
+            int posts = 0;
+            PlayloopClient? self = null;
+            var handler = new MockHttpHandler();
+            handler.Responder = req =>
+            {
+                if (!req.Url.EndsWith("/api/telemetry"))
+                {
+                    return new Http.HttpResponseData(200, "{\"ok\":true}", new Dictionary<string, string> { ["content-type"] = "application/json" });
+                }
+                posts++;
+                // The race, reproduced exactly: the game keeps playing while the end is on the
+                // wire. This runs inside FlushAsync's await, after the buffer was snapshotted.
+                if (posts == 2) self!.Telemetry.Track("during");
+                return posts == 2
+                    ? new Http.HttpResponseData(500, "{\"error\":\"down\"}", new Dictionary<string, string> { ["content-type"] = "application/json" })
+                    : new Http.HttpResponseData(200,
+                        "{\"ok\":true,\"sessionId\":\"sess_test\",\"appended\":true,\"eventsIngested\":1,\"analyzeKicked\":false}",
+                        new Dictionary<string, string> { ["content-type"] = "application/json" });
+            };
+            using var client = PlayloopClientTests.NewClient(handler);
+            self = client;
+
+            client.Telemetry.Track("a");
+            await client.Telemetry.FlushAsync();
+            Assert.AreEqual("sess_test", client.Telemetry.CurrentSessionId);
+
+            client.Telemetry.Track("b");
+            Assert.ThrowsAsync<PlayloopException>(async () => await client.Telemetry.EndSessionAsync());
+
+            Assert.AreEqual(1, client.Telemetry.PendingCount,
+                "only the ended session's own event is requeued; the newcomer is parked for the next session");
+
+            await client.Telemetry.FlushAsync();
+            var retry = JObject.Parse(Encoding.UTF8.GetString(handler.Calls[2].JsonBody!));
+            Assert.AreEqual("sess_test", retry["sessionId"]!.Value<string>());
+            Assert.IsTrue(retry["sessionEnded"]!.Value<bool>());
+            Assert.AreEqual(1, ((JArray)retry["events"]!).Count,
+                "the retry of an ended session must not carry an event tracked after it ended");
+            Assert.AreEqual("b", retry["events"]![0]!["name"]!.Value<string>());
+
+            // and the parked event opens the NEXT session
+            Assert.IsNull(client.Telemetry.CurrentSessionId);
+            await client.Telemetry.FlushAsync();
+            var next = JObject.Parse(Encoding.UTF8.GetString(handler.Calls[3].JsonBody!));
+            Assert.IsNull(next["sessionId"], "a new session, not the one that ended");
+            Assert.IsNull(next["sessionEnded"]);
+            Assert.AreEqual("during", next["events"]![0]!["name"]!.Value<string>());
+        }
+
         [Test]
         public void BufferEvictsOldestAtCap()
         {

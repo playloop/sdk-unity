@@ -54,6 +54,14 @@ namespace Playloop.Telemetry
 
         private readonly object _bufferLock = new object();
         private readonly List<TelemetryEvent> _buffer = new List<TelemetryEvent>();
+        // Events tracked while an end is in flight belong to the NEXT session, not the one
+        // being closed. FlushAsync snapshots and clears _buffer inside _bufferLock and then
+        // awaits the HTTP call OUTSIDE it, while Track only ever takes _bufferLock, so an
+        // event can land between the snapshot and CompleteSessionEnd(). Before this buffer
+        // existed such an event stayed in _buffer, CompleteSessionEnd() cleared the session
+        // id underneath it, and the next auto-batch flush posted it with no sessionId, so the
+        // server opened a NEW session out of the old one's tail. CodeRabbit on PR #5, major.
+        private readonly List<TelemetryEvent> _nextBuffer = new List<TelemetryEvent>();
 
         // SemaphoreSlim instead of lock: lets FlushAsync await it without blocking.
         private readonly SemaphoreSlim _flushLock = new SemaphoreSlim(1, 1);
@@ -287,19 +295,29 @@ namespace Playloop.Telemetry
         /// </summary>
         public async Task EndSessionAsync(CancellationToken ct = default)
         {
-            bool hasActiveSession;
             lock (_bufferLock)
             {
-                hasActiveSession = _sessionActive || _currentSessionId != null;
-                if (!hasActiveSession) return;
-                _endRequested = true;
+                if (!(_sessionActive || _currentSessionId != null)) return;
             }
 
             // Close the Trace first so its final chunk rides the same flush
             // that carries sessionEnded. Idempotent: a game that already
             // called End(Death) or End(LevelComplete) keeps that reason.
+            //
+            // ⚠️ ORDER IS LOAD-BEARING: this runs BEFORE _endRequested is set. Track parks
+            // events once an end is requested, because they belong to the NEXT session, and
+            // the Trace's final chunk is the one event that must NOT be parked: it is the
+            // ending session's last word and has to ride the flush carrying sessionEnded.
+            // Marking the end first parked it and broke both EndFromSessionEnd tests.
             try { _trace?.End(Playloop.Trace.TraceEndReason.Quit); }
             catch { /* the Trace must never block the session end */ }
+
+            lock (_bufferLock)
+            {
+                // Re-checked: another thread may have completed an end while the Trace closed.
+                if (!(_sessionActive || _currentSessionId != null)) return;
+                _endRequested = true;
+            }
 
             // The flush that delivers sessionEnded completes the end (see
             // CompleteSessionEnd). If it fails, the end stays requested and
@@ -331,6 +349,17 @@ namespace Playloop.Telemetry
                 _sessionMetadata = null;
                 _endRequested = false;
                 _sessionActive = false;
+                // Whatever arrived while the end was in flight is the new session's opening
+                // events. Front of the queue, so their original order survives.
+                if (_nextBuffer.Count > 0)
+                {
+                    _buffer.InsertRange(0, _nextBuffer);
+                    _nextBuffer.Clear();
+                    if (_buffer.Count > _maxBufferSize)
+                    {
+                        _buffer.RemoveRange(0, _buffer.Count - _maxBufferSize); // evict the oldest
+                    }
+                }
             }
             try { _trace?.ResetForNewSession(); }
             catch { /* best effort */ }
@@ -399,10 +428,14 @@ namespace Playloop.Telemetry
 
             lock (_bufferLock)
             {
-                _buffer.Add(ev);
-                if (_buffer.Count > _maxBufferSize)
+                // An end is pending, so this event is not part of the session being closed.
+                // Park it for the next one rather than letting it ride the end flush or get
+                // orphaned by CompleteSessionEnd().
+                var target = _endRequested ? _nextBuffer : _buffer;
+                target.Add(ev);
+                if (target.Count > _maxBufferSize)
                 {
-                    _buffer.RemoveAt(0); // evict the oldest
+                    target.RemoveAt(0); // evict the oldest
                 }
             }
         }

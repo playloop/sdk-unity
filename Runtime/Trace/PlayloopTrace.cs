@@ -62,6 +62,11 @@ namespace Playloop.Trace
                         "The Trace declares the options plane, so this component now samples on it.");
                 }
                 plane = client.Trace.Plane;
+                // _lastX/_lastY were projected on the OLD plane. Carrying them across the
+                // swap makes the next Update subtract two different coordinate systems and
+                // emit one bogus facing. Drop the history and let the next sample re-seed.
+                // CodeRabbit on PR #5, minor.
+                _hasLast = false;
             }
         }
 

@@ -162,6 +162,26 @@ namespace Playloop.Samples.TraceFixture
                     // Already reported by ReportEndAsync.
                 }
             }
+            else if (end != null && end.IsFaulted)
+            {
+                // ⚠️ A FAULTED TASK IS ALREADY COMPLETED, so the wait above skips it entirely
+                // and we would dispose the client with the end still requested and the final
+                // Trace chunk still buffered. Nothing else retries: Dispose() only cancels the
+                // batcher and disposes the flush lock. Since the failed end left the events on
+                // the buffer and sessionEnded still requested, one more EndSessionAsync carries
+                // exactly the same end. CodeRabbit on PR #5, minor.
+                try
+                {
+                    if (!client.Telemetry.EndSessionAsync().Wait(ShutdownWaitMs))
+                    {
+                        Debug.LogWarning($"[Playloop] Trace fixture: the retried session end did not finish within {ShutdownWaitMs} ms; the final chunk may be lost.");
+                    }
+                }
+                catch (System.AggregateException)
+                {
+                    Debug.LogWarning("[Playloop] Trace fixture: the session end failed twice; the final chunk is lost.");
+                }
+            }
 #endif
             client.Dispose();
         }
