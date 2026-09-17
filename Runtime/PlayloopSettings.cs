@@ -73,6 +73,10 @@ namespace Playloop
         [Tooltip("Built-in auto-events that fire from Telemetry.AutoBatch(). Drop the SDK in and useful telemetry shows up without writing any Track() calls.")]
         [SerializeField] private AutoInstrumentBlock autoInstrument = new();
 
+        [Header("Trace")]
+        [Tooltip("Sampled session state for Playback: player position and facing, room, action bits, movement axes, a few named entities. Sent as trace_chunk events.")]
+        [SerializeField] private TraceBlock trace = new();
+
         /// <summary>
         /// Builds a fresh <see cref="PlayloopOptions"/> populated from this
         /// asset's inspector values. Call once at startup; mutating the asset
@@ -103,6 +107,14 @@ namespace Playloop
                     Memory = autoInstrument.memory,
                     IdleThresholdSec = autoInstrument.idleThresholdSec,
                     FpsDropThreshold = autoInstrument.fpsDropThreshold,
+                },
+                Trace = new Playloop.Trace.TraceOptions
+                {
+                    Mode = trace.mode,
+                    Hz = trace.hz,
+                    Plane = trace.plane,
+                    MaxEntities = trace.maxEntities,
+                    MaxBytesPerSession = trace.maxBytesPerSession,
                 },
             };
         }
@@ -187,6 +199,28 @@ namespace Playloop
             [Tooltip("Median FPS below which fps_drop fires. Default 30.")]
             [Min(1f)]
             public float fpsDropThreshold = 30f;
+        }
+
+        [Serializable]
+        private sealed class TraceBlock
+        {
+            [Tooltip("Auto: on everywhere except a 'production' environment. On: always, including production (disclose it in your privacy notice first). Off: never.")]
+            public Playloop.Trace.TraceMode mode = Playloop.Trace.TraceMode.Auto;
+
+            [Tooltip("Samples per second, 5 to 20. Default 10.")]
+            [Range(5, 20)]
+            public int hz = 10;
+
+            [Tooltip("Which two world axes the Trace carries. XY for side-on and 2D, XZ for top-down and 3D.")]
+            public Playloop.Trace.TracePlane plane = Playloop.Trace.TracePlane.XY;
+
+            [Tooltip("Named entities tracked per session, up to 8. Default 8.")]
+            [Range(0, 8)]
+            public int maxEntities = 8;
+
+            [Tooltip("Per-session budget for Trace data in bytes. At the budget the Trace stops and marks itself 'budget'. Default 2 MB.")]
+            [Min(0)]
+            public int maxBytesPerSession = Playloop.Trace.TraceOptions.DefaultMaxBytesPerSession;
         }
     }
 }
