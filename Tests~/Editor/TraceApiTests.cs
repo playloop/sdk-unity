@@ -266,6 +266,7 @@ namespace Playloop.Tests
             var body = JObject.Parse(Encoding.UTF8.GetString(telemetryCall.JsonBody!));
             var chunk = body["events"]!.Single(e => e["name"]!.Value<string>() == "trace_chunk")["data"]!;
             Assert.AreEqual("quit", chunk["end"]!["reason"]!.Value<string>());
+            Assert.AreEqual(1, body["traceChunks"]!.Value<int>(), "top-level, the field the server reads on an append");
             Assert.AreEqual(1, body["sessionMetadata"]!["traceChunks"]!.Value<int>());
 
             Assert.AreEqual(TraceStatus.Active, client.Trace.Status, "re-armed for the next session");
@@ -387,6 +388,164 @@ namespace Playloop.Tests
             CollectionAssert.AreEqual(new object?[] { 1, 1, null, null }, rows[3]);
             CollectionAssert.AreEqual(new object?[] { 1, 2, 3L, 3L }, rows[4]);
             Assert.AreEqual(5, rows.Count, "no despawn row for a name that was set again");
+        }
+
+        [Test]
+        public void EndFromSessionEnd_StaysPendingUntilTheServerTakesIt()
+        {
+            // Create succeeds, the end request fails once, the retry succeeds.
+            int posts = 0;
+            var handler = new MockHttpHandler
+            {
+                Responder = req =>
+                {
+                    if (!req.Url.EndsWith("/api/telemetry", StringComparison.Ordinal))
+                    {
+                        return new Http.HttpResponseData(401, "{}", new Dictionary<string, string> { ["content-type"] = "application/json" });
+                    }
+                    posts++;
+                    return posts == 2
+                        ? new Http.HttpResponseData(500, "{\"error\":\"down\"}", new Dictionary<string, string> { ["content-type"] = "application/json" })
+                        : new Http.HttpResponseData(200, "{\"sessionId\":\"s1\"}", new Dictionary<string, string> { ["content-type"] = "application/json" });
+                },
+            };
+            using var client = NewClient(handler);
+            client.Telemetry.StartSession();
+            client.Telemetry.Track("boot");
+            client.Telemetry.FlushAsync().GetAwaiter().GetResult();
+            Assert.AreEqual("s1", client.Telemetry.CurrentSessionId);
+
+            client.Trace.SetRoom("hall");
+            client.Trace.Tick(0.0, Wall);
+            Assert.ThrowsAsync<PlayloopException>(async () => await client.Telemetry.EndSessionAsync());
+
+            // Nothing about the old session moved: the end chunk is back on
+            // the buffer, the session id is kept, and the Trace is not re-armed.
+            Assert.AreEqual("s1", client.Telemetry.CurrentSessionId);
+            Assert.AreEqual(1, client.Telemetry.PendingCount);
+            Assert.AreEqual(TraceStatus.Ended, client.Trace.Status);
+
+            // The next flush, which the batch loop would run, carries the same
+            // end again and completes it.
+            client.Telemetry.FlushAsync().GetAwaiter().GetResult();
+            var retry = handler.Calls.Where(c => c.Url.EndsWith("/api/telemetry", StringComparison.Ordinal)).Last();
+            var body = JObject.Parse(Encoding.UTF8.GetString(retry.JsonBody!));
+            Assert.AreEqual("s1", body["sessionId"]!.Value<string>());
+            Assert.IsTrue(body["sessionEnded"]!.Value<bool>());
+            var chunk = body["events"]!.Single(e => e["name"]!.Value<string>() == "trace_chunk")["data"]!;
+            Assert.AreEqual(0, chunk["seq"]!.Value<int>());
+            Assert.AreEqual("quit", chunk["end"]!["reason"]!.Value<string>());
+            Assert.AreEqual(1, body["traceChunks"]!.Value<int>());
+
+            Assert.IsNull(client.Telemetry.CurrentSessionId);
+            Assert.AreEqual(0, client.Telemetry.PendingCount);
+            Assert.AreEqual(TraceStatus.Active, client.Trace.Status, "re-armed only after the server took the end");
+
+            // The next session starts clean: its first chunk is seq 0 with
+            // nothing from the old session mixed in.
+            client.Telemetry.StartSession();
+            client.Trace.Tick(10.0, Wall + 10000);
+            client.Trace.End(TraceEndReason.LevelComplete);
+            var pending = client.Telemetry.SnapshotPending().Where(e => e.Name == "trace_chunk").ToList();
+            Assert.AreEqual(1, pending.Count);
+            Assert.AreEqual(0, pending[0].Data!["seq"]);
+            Assert.AreEqual("level_complete", ((Dictionary<string, object>)pending[0].Data!["end"])["reason"]);
+        }
+
+        [Test]
+        public void Entities_CapCountsDistinctNamesPerSession()
+        {
+            var warnings = new List<string>();
+            var chunks = new List<Dictionary<string, object>>();
+            var sampler = new TraceSampler(10, TracePlane.XY, 8, TraceOptions.DefaultMaxBytesPerSession, (c, t0) => chunks.Add(c))
+            {
+                Warn = warnings.Add,
+            };
+            for (int i = 0; i < 8; i++) sampler.SetEntity($"e{i}", i, i);
+            sampler.Tick(0.0, Wall);
+
+            // e0 despawns and is sampled as gone, then comes back: the same
+            // name takes no second slot.
+            sampler.ClearEntity("e0");
+            sampler.Tick(0.1, Wall + 100);
+            sampler.SetEntity("e0", 5, 5);
+            Assert.AreEqual(0, warnings.Count, "a returning name is not a ninth name");
+
+            // A ninth distinct name is refused, once, with one warning.
+            sampler.SetEntity("e8", 9, 9);
+            sampler.SetEntity("e9", 9, 9);
+            Assert.AreEqual(1, warnings.Count);
+            sampler.Tick(0.2, Wall + 200);
+            sampler.End(TraceEndReason.Quit);
+            var ents = (string[])chunks[0]["ents"];
+            CollectionAssert.DoesNotContain(ents, "e8");
+            CollectionAssert.DoesNotContain(ents, "e9");
+            CollectionAssert.Contains(ents, "e0");
+
+            // A new session counts over from the names it carries: the seven
+            // cleared before the reset belong to the old session and are
+            // dropped, e0 is the one live entity, so seven new names fit and
+            // the eighth new one is refused.
+            for (int i = 1; i < 8; i++) sampler.ClearEntity($"e{i}");
+            sampler.ResetForNewSession();
+            sampler.Tick(20.0, Wall + 20000);
+            warnings.Clear();
+            for (int i = 0; i < 7; i++) sampler.SetEntity($"n{i}", i, i);
+            Assert.AreEqual(0, warnings.Count);
+            sampler.SetEntity("n7", 7, 7);
+            Assert.AreEqual(1, warnings.Count, "e0 plus seven new names is the cap");
+            sampler.Tick(20.1, Wall + 20100);
+            sampler.End(TraceEndReason.Quit);
+            var ents2 = (string[])chunks.Last()["ents"];
+            CollectionAssert.Contains(ents2, "e0");
+            CollectionAssert.Contains(ents2, "n6");
+            CollectionAssert.DoesNotContain(ents2, "n7");
+            CollectionAssert.DoesNotContain(ents2, "e1", "a despawn pending at the reset is not written into the new session");
+        }
+
+        [Test]
+        public void Rooms_BoundsCacheIsCappedPerClient_RoomsStillSampled()
+        {
+            var warnings = new List<string>();
+            var chunks = new List<Dictionary<string, object>>();
+            var sampler = new TraceSampler(10, TracePlane.XY, 8, TraceOptions.DefaultMaxBytesPerSession, (c, t0) => chunks.Add(c))
+            {
+                Warn = warnings.Add,
+            };
+            for (int i = 0; i < TraceSampler.MaxRoomBounds; i++)
+            {
+                sampler.SetRoom($"r{i}", new TraceBounds(i, 0, i + 1, 1));
+            }
+            Assert.AreEqual(0, warnings.Count);
+
+            // One past the cap: the room is sampled, its bounds are not kept.
+            sampler.SetRoom("overflow", new TraceBounds(0, 0, 9, 9));
+            Assert.AreEqual(1, warnings.Count);
+            sampler.Tick(0.0, Wall);
+            sampler.SetRoom("overflow_2", new TraceBounds(0, 0, 9, 9));
+            Assert.AreEqual(1, warnings.Count, "one warning per client");
+            sampler.Tick(0.1, Wall + 100);
+
+            // A room declared before the cap still updates its bounds.
+            sampler.SetRoom("r0", new TraceBounds(0, 0, 50, 50));
+            sampler.Tick(0.2, Wall + 200);
+            sampler.End(TraceEndReason.Quit);
+
+            var rooms = ((object[])chunks[0]["rooms"]).Cast<Dictionary<string, object>>().ToList();
+            CollectionAssert.AreEqual(new[] { "overflow", "overflow_2", "r0" }, rooms.Select(r => (string)r["id"]).ToArray());
+            Assert.IsFalse(rooms[0].ContainsKey("b"), "no bounds past the cap");
+            Assert.IsFalse(rooms[1].ContainsKey("b"));
+            CollectionAssert.AreEqual(new object[] { 0L, 0L, 50L, 50L }, (object[])rooms[2]["b"]);
+            var rows = ((object[])chunks[0]["s"]).Cast<object[]>().ToList();
+            Assert.AreEqual(0, rows[0][4], "the overflow room is still the sampled room");
+            Assert.AreEqual(1, rows[1][4]);
+            Assert.AreEqual(2, rows[2][4]);
+
+            // The cap outlives a session.
+            sampler.ResetForNewSession();
+            warnings.Clear();
+            sampler.SetRoom("overflow_3", new TraceBounds(0, 0, 9, 9));
+            Assert.AreEqual(0, warnings.Count, "the one warning per client was already given");
         }
     }
 }

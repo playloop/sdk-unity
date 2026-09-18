@@ -39,9 +39,18 @@ where sessions ended, once those views are available.
   `"production"` environment.
 - `PlayloopTrace` component (**Playloop → Trace**), the package's first
   Inspector-facing MonoBehaviour: feeds a Transform's position and heading.
-- The session end closes the Trace with `Quit` and stamps
-  `sessionMetadata.traceChunks` on the final flush; when the Trace is off for
-  a session, one `trace_state` event says why.
+- The session end closes the Trace with `Quit` and stamps the chunk count on
+  the final flush, as a top-level `traceChunks` field and in
+  `sessionMetadata`; when the Trace is off for a session, one `trace_state`
+  event says why. A session end whose flush fails stays pending, with its
+  events requeued, until a later flush delivers it; the Trace re-arms only
+  then, so a new session never carries the old session's final chunk.
+- The entity cap counts distinct names per session, so a name that despawns
+  and returns takes no second slot, and a new session counts over from the
+  names it carries. Declared room bounds are remembered for up to 1,024 rooms
+  per client; past that a room is still sampled without bounds.
+- `PlayloopTrace` projects on the client's `TraceOptions.Plane`; `Attach`
+  adopts it into the component and warns if the Inspector value differed.
 - **Trace Fixture** sample: a tiny scripted game that walks a known path
   through three rooms and dies at (50, 5) in `vault`, with a committed golden
   of its three chunks so every engine's fixture can be checked byte for byte.

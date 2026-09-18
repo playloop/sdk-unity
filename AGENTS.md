@@ -142,9 +142,10 @@ client.Trace.End(TraceEndReason.Death);                          // Quit is sent
 
 Labels are lowercase slugs (`^[a-z][a-z0-9_]{0,23}$` for actions, room ids may
 also carry `:` and `-`, up to 64 chars) and a bad one throws `ArgumentException`
-even on a disabled client. **There is no overload that takes a `KeyCode`, an
-`InputAction`, a button name, or a string**; do not add one. Sample rows are
-eight numbers. `Trace.Status` explains why nothing is flowing (`OffByEnvironment`
+even on a disabled client. `DefineActions`, `SetRoom` and `SetEntity` take those
+slugs by design. **`SetInput` takes only the abstract action mask and two axes:
+there is no overload that takes a `KeyCode`, an `InputAction`, a button name, or
+a string**; do not add one. Sample rows are eight numbers. `Trace.Status` explains why nothing is flowing (`OffByEnvironment`
 in a `"production"` build under the default `TraceMode.Auto`, `OffByOption`,
 `OffByConfig`, `Disabled`, `BudgetExhausted`, `Ended`). Options live on
 `PlayloopOptions.Trace` (`Mode`, `Hz`, `Plane`, `MaxEntities`, `MaxBytesPerSession`).
