@@ -13,9 +13,11 @@ namespace Playloop.Samples.TraceFixture
     /// and press Play: it builds its own scene (three colored quads for the
     /// rooms, a capsule for the player, a small cube for the key), starts a
     /// session, walks <see cref="TraceFixtureRoute"/> on the unscaled clock,
-    /// ends the Trace with <c>Death</c> at (50, 5) in <c>vault</c>, and ends
-    /// the session. Open the session on the dashboard and Playback should draw
-    /// that route with the end marker on that spot.
+    /// ends the first run with <c>Death</c> at (50, 5) in <c>vault</c>, waits
+    /// two seconds, respawns in <c>hall</c> for a short second run that ends
+    /// with <c>Quit</c> at (10, 5), and ends the session. Open the session on
+    /// the dashboard and Playback should draw both runs with an end marker on
+    /// each spot.
     /// </summary>
     public sealed class PlayloopTraceFixture : MonoBehaviour
     {
@@ -39,6 +41,8 @@ namespace Playloop.Samples.TraceFixture
         private string _room = "";
         private bool _keyCleared;
         private double _startSec;
+        private bool _firstRunEnded;
+        private bool _secondRunBegun;
         private bool _done;
 
         private void Start()
@@ -75,18 +79,46 @@ namespace Playloop.Samples.TraceFixture
         {
             if (_done || _client == null) return;
             double t = Time.unscaledTimeAsDouble - _startSec;
-            Apply(t);
 
-            if (t >= TraceFixtureRoute.EndSec)
+            if (TraceFixtureRoute.IsBetweenRuns(t))
+            {
+                // The first run ends with a death; then nothing is pushed
+                // until the respawn, and the Trace samples nothing.
+                if (!_firstRunEnded)
+                {
+                    _firstRunEnded = true;
+                    _client.Trace.End(TraceEndReason.Death);
+                }
+                return;
+            }
+
+            if (TraceFixtureRoute.IsSecondRun(t) && !_secondRunBegun)
+            {
+                // A frame can jump past the whole gap: close the first run
+                // before opening the second, so it still ends with Death.
+                if (!_firstRunEnded)
+                {
+                    _firstRunEnded = true;
+                    _client.Trace.End(TraceEndReason.Death);
+                }
+                _secondRunBegun = true;
+                _client.Trace.Begin();
+                _room = ""; // re-declare the room for the new run
+            }
+
+            if (t >= TraceFixtureRoute.Run2EndSec)
             {
                 _done = true;
-                _client.Trace.End(TraceEndReason.Death);
+                _client.Trace.End(TraceEndReason.Quit);
                 // Keep the task: OnDestroy waits on it before the client goes
                 // away, so the final chunk and the end signal are not lost to
                 // a scene change or a stopped Play.
                 _endTask = _client.Telemetry.EndSessionAsync();
                 _ = ReportEndAsync(_endTask);
+                return;
             }
+
+            Apply(t);
         }
 
         private void Apply(double t)
@@ -127,7 +159,7 @@ namespace Playloop.Samples.TraceFixture
             try
             {
                 await end;
-                Debug.Log("[Playloop] Trace fixture finished: the session ended at (50, 5) in vault. Open it on the dashboard to check Playback.");
+                Debug.Log("[Playloop] Trace fixture finished: run 0 ended with death at (50, 5) in vault, run 1 with quit at (10, 5) in hall. Open the session on the dashboard to check Playback.");
             }
             catch (System.Exception e)
             {

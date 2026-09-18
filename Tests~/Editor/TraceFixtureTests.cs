@@ -21,19 +21,25 @@ namespace Playloop.Tests
     /// <see cref="PlayloopClient"/> on a fake clock and audits every byte that
     /// reaches the wire. The committed golden file is what every engine's
     /// fixture must reproduce from the same route table.
+    ///
+    /// <para>
+    /// Two runs in one session: run 0 walks the three rooms and ends with
+    /// <c>death</c>, the clock keeps ticking with no state for two seconds,
+    /// then run 1 opens with <c>Begin()</c>, walks a short way in <c>hall</c>
+    /// and ends with <c>quit</c> before the session end.
+    /// </para>
     /// </summary>
     [TestFixture]
     public class TraceFixtureTests
     {
         private const long BaseWallMs = 1758140000000L;
         private const int StepMs = 100;
-        private const int RunMs = 13000;
         private const string UpdateGoldenEnv = "PLAYLOOP_UPDATE_TRACE_GOLDEN";
 
         private static readonly string[] KnownLabels =
         {
             TraceFixtureRoute.RoomHall, TraceFixtureRoute.RoomCrypt, TraceFixtureRoute.RoomVault,
-            "move", "jump", "attack", TraceFixtureRoute.EntityKey, "xy", "death",
+            "move", "jump", "attack", TraceFixtureRoute.EntityKey, "xy", "death", "quit",
         };
 
         private sealed class Run
@@ -80,9 +86,33 @@ namespace Playloop.Tests
 
                 string room = "";
                 bool keyCleared = false;
-                for (int ms = 0; ms < RunMs; ms += StepMs)
+                bool firstRunEnded = false;
+                bool secondRunBegun = false;
+                int endMs = (int)Math.Round(TraceFixtureRoute.Run2EndSec * 1000.0);
+                for (int ms = 0; ms < endMs; ms += StepMs)
                 {
                     double t = ms / 1000.0;
+
+                    // Mirror the batcher's five-second flush cadence.
+                    if (ms > 0 && ms % 5000 == 0) await client.Telemetry.FlushAsync();
+
+                    if (TraceFixtureRoute.IsBetweenRuns(t))
+                    {
+                        // The run ends at its end time, then the game pushes
+                        // nothing while the clock keeps ticking.
+                        if (!firstRunEnded)
+                        {
+                            firstRunEnded = true;
+                            client.Trace.End(TraceEndReason.Death);
+                        }
+                        client.Trace.Tick(t, BaseWallMs + ms);
+                        continue;
+                    }
+                    if (TraceFixtureRoute.IsSecondRun(t) && !secondRunBegun)
+                    {
+                        secondRunBegun = true;
+                        client.Trace.Begin();
+                    }
 
                     string r = TraceFixtureRoute.RoomAt(t);
                     if (r != room)
@@ -109,12 +139,10 @@ namespace Playloop.Tests
                     }
 
                     client.Trace.Tick(t, BaseWallMs + ms);
-
-                    // Mirror the batcher's five-second flush cadence.
-                    if (ms > 0 && ms % 5000 == 0) await client.Telemetry.FlushAsync();
                 }
 
-                client.Trace.End(TraceEndReason.Death);
+                client.Trace.End(TraceEndReason.Quit);
+                Assert.AreEqual(TraceStatus.BetweenRuns, client.Trace.Status);
                 await client.Telemetry.EndSessionAsync();
             }
 
@@ -141,12 +169,24 @@ namespace Playloop.Tests
         // ───────────────────────── the chunks ─────────────────────────
 
         [Test]
-        public void ExactlyThreeChunks_SeqZeroOneTwo()
+        public void ExactlyFourChunks_SeqCountsAcrossRuns_SegPerRun()
         {
-            Assert.AreEqual(3, _run.Chunks.Count, "three trace_chunk events across the POST bodies");
-            for (int i = 0; i < 3; i++)
+            Assert.AreEqual(4, _run.Chunks.Count, "four trace_chunk events across the POST bodies");
+            int[] segs = { 0, 0, 0, 1 };
+            for (int i = 0; i < 4; i++)
             {
                 Assert.AreEqual(i, _run.Chunks[i]["seq"]!.Value<int>(), $"seq of chunk {i}");
+                Assert.AreEqual(segs[i], _run.Chunks[i]["seg"]!.Value<int>(), $"seg of chunk {i}");
+            }
+        }
+
+        [Test]
+        public void ChunkKeys_InWireOrder_SegAlwaysWritten()
+        {
+            foreach (var chunk in _run.Chunks)
+            {
+                var keys = chunk.Properties().Select(p => p.Name).ToList();
+                Assert.AreEqual(new[] { "v", "seq", "seg", "t0", "hz", "plane" }, keys.Take(6).ToArray(), $"key order of seq {chunk["seq"]}");
             }
         }
 
@@ -173,6 +213,8 @@ namespace Playloop.Tests
             Assert.AreEqual(BaseWallMs, _run.Chunks[0]["t0"]!.Value<long>());
             Assert.AreEqual(BaseWallMs + 5000, _run.Chunks[1]["t0"]!.Value<long>());
             Assert.AreEqual(BaseWallMs + 10000, _run.Chunks[2]["t0"]!.Value<long>());
+            Assert.AreEqual(BaseWallMs + 15000, _run.Chunks[3]["t0"]!.Value<long>(), "run 1 re-anchors at the respawn");
+            Assert.AreEqual(0L, Samples(_run.Chunks[3])[0][0]!.Value<long>(), "run 1's first sample is dt 0");
         }
 
         [Test]
@@ -182,6 +224,7 @@ namespace Playloop.Tests
             CollectionAssert.AreEqual(TraceFixtureRoute.Actions, acts);
             Assert.IsNull(_run.Chunks[1]["acts"], "seq 1 does not repeat acts");
             Assert.IsNull(_run.Chunks[2]["acts"], "seq 2 does not repeat acts");
+            Assert.IsNull(_run.Chunks[3]["acts"], "a new run does not repeat acts");
         }
 
         [Test]
@@ -190,15 +233,16 @@ namespace Playloop.Tests
             AssertRooms(_run.Chunks[0], (TraceFixtureRoute.RoomHall, TraceFixtureRoute.HallBounds), (TraceFixtureRoute.RoomCrypt, TraceFixtureRoute.CryptBounds));
             AssertRooms(_run.Chunks[1], (TraceFixtureRoute.RoomCrypt, TraceFixtureRoute.CryptBounds), (TraceFixtureRoute.RoomVault, TraceFixtureRoute.VaultBounds));
             AssertRooms(_run.Chunks[2], (TraceFixtureRoute.RoomVault, TraceFixtureRoute.VaultBounds));
+            AssertRooms(_run.Chunks[3], (TraceFixtureRoute.RoomHall, TraceFixtureRoute.HallBounds));
         }
 
         [Test]
-        public void SampleCounts_FiftyFiftyThirty()
+        public void SampleCounts_FiftyFiftyThirtyThirty()
         {
             Assert.AreEqual(50, Samples(_run.Chunks[0]).Count);
             Assert.AreEqual(50, Samples(_run.Chunks[1]).Count);
-            int last = Samples(_run.Chunks[2]).Count;
-            Assert.That(last, Is.InRange(29, 31), "last chunk holds 30 samples, give or take one");
+            Assert.AreEqual(30, Samples(_run.Chunks[2]).Count, "run 0's last chunk: 10.0 s to 12.9 s");
+            Assert.AreEqual(30, Samples(_run.Chunks[3]).Count, "run 1: 15.0 s to 17.9 s, nothing sampled between runs");
             foreach (var chunk in _run.Chunks)
             {
                 foreach (var row in Samples(chunk))
@@ -223,11 +267,12 @@ namespace Playloop.Tests
         [Test]
         public void AttackBit_OnlyInsideItsWindow()
         {
-            for (int seq = 0; seq < 3; seq++)
+            foreach (var chunk in _run.Chunks)
             {
-                foreach (var row in Samples(_run.Chunks[seq]))
+                long chunkStart = chunk["t0"]!.Value<long>() - BaseWallMs;
+                foreach (var row in Samples(chunk))
                 {
-                    long t = seq * 5000 + row[0]!.Value<long>();
+                    long t = chunkStart + row[0]!.Value<long>();
                     bool attack = (row[5]!.Value<int>() & TraceFixtureRoute.BitAttack) != 0;
                     bool inWindow = t >= 6000 && t <= 6500;
                     Assert.AreEqual(inWindow, attack, $"attack bit at t={t} ms");
@@ -276,6 +321,42 @@ namespace Playloop.Tests
             Assert.AreEqual(TraceFixtureRoute.RoomVault, rooms[end["r"]!.Value<int>()]!["id"]!.Value<string>());
             var lastRow = Samples(_run.Chunks[2]).Last();
             Assert.AreEqual(lastRow[0]!.Value<long>(), end["dt"]!.Value<long>(), "end.dt is the last sample's dt");
+            Assert.AreEqual(2900L, end["dt"]!.Value<long>(), "ms since seq 2's t0");
+        }
+
+        [Test]
+        public void SecondRun_WalksHallStopsAndQuits()
+        {
+            var chunk = _run.Chunks[3];
+            var rows = Samples(chunk);
+            Assert.AreEqual(TraceFixtureRoute.StartX, rows[0][1]!.Value<double>(), 0.001, "respawn at the start");
+            foreach (var row in rows)
+            {
+                long t = 15000 + row[0]!.Value<long>();
+                bool stopped = t >= 17250;
+                Assert.AreEqual(TraceFixtureRoute.RoomHall, RoomOf(chunk, row));
+                Assert.AreEqual(0, row[3]!.Value<int>(), $"facing at t={t} ms");
+                Assert.AreEqual(stopped ? 0 : TraceFixtureRoute.BitMove, row[5]!.Value<int>(), $"action bits at t={t} ms");
+                Assert.AreEqual(stopped ? 0.0 : 1.0, row[6]!.Value<double>(), 0.0001, $"axis x at t={t} ms");
+                if (stopped) Assert.AreEqual(TraceFixtureRoute.Run2StopX, row[1]!.Value<double>(), 0.001);
+            }
+            Assert.AreEqual(0, ((JArray)chunk["e"]!).Count, "the key never comes back");
+            Assert.AreEqual(0, ((JArray)chunk["ents"]!).Count);
+
+            var end = (JObject?)chunk["end"];
+            Assert.IsNotNull(end, "run 1's chunk carries its own end block");
+            Assert.AreEqual("quit", end!["reason"]!.Value<string>());
+            Assert.AreEqual(0, end["r"]!.Value<int>());
+            Assert.AreEqual(TraceFixtureRoute.Run2StopX, end["x"]!.Value<double>(), 0.001);
+            Assert.AreEqual(TraceFixtureRoute.LaneY, end["y"]!.Value<double>(), 0.001);
+            Assert.AreEqual(2900L, end["dt"]!.Value<long>());
+        }
+
+        [Test]
+        public void TwoEndBlocks_OnePerRun()
+        {
+            var ends = _run.Chunks.Where(c => c["end"] != null).Select(c => (c["seq"]!.Value<int>(), c["end"]!["reason"]!.Value<string>())).ToList();
+            CollectionAssert.AreEqual(new[] { (2, "death"), (3, "quit") }, ends);
         }
 
         [Test]
@@ -307,8 +388,19 @@ namespace Playloop.Tests
             // Top-level is the field the server reads on an append; the
             // metadata copy only counts when the session creates and ends in
             // one flush.
-            Assert.AreEqual(3, endBody["traceChunks"]!.Value<int>());
-            Assert.AreEqual(3, endBody["sessionMetadata"]!["traceChunks"]!.Value<int>());
+            Assert.AreEqual(4, endBody["traceChunks"]!.Value<int>());
+            Assert.AreEqual(4, endBody["sessionMetadata"]!["traceChunks"]!.Value<int>());
+        }
+
+        [Test]
+        public void SessionEnd_BetweenRuns_WritesNoFurtherChunk()
+        {
+            var endBody = _run.Bodies.Single(b => b["sessionEnded"] != null && b["sessionEnded"]!.Value<bool>());
+            var chunkSeqs = ((JArray)endBody["events"]!)
+                .Where(e => e["name"]!.Value<string>() == "trace_chunk")
+                .Select(e => e["data"]!["seq"]!.Value<int>())
+                .ToList();
+            CollectionAssert.AreEqual(new[] { 3 }, chunkSeqs, "the end flush carries run 1's quit chunk and nothing after it");
         }
 
         [Test]

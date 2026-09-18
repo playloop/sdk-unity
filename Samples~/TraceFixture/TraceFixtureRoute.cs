@@ -15,6 +15,13 @@ namespace Playloop.Samples.TraceFixture
     /// at (30, 8), sits still until it is picked up as the player leaves
     /// <c>crypt</c>.
     /// </para>
+    ///
+    /// <para>
+    /// Two runs in one session. The first run ends with <c>Death</c> at
+    /// 13.0 s. Nothing is pushed between runs. At 15.0 s the player respawns
+    /// in <c>hall</c> at (1, 5), walks +x at the same speed, stops at
+    /// (10, 5) at 17.25 s, and quits at 18.0 s. The key does not come back.
+    /// </para>
     /// </summary>
     public static class TraceFixtureRoute
     {
@@ -50,18 +57,36 @@ namespace Playloop.Samples.TraceFixture
         public const double StopSec = 12.25;
         public const double EndSec = 13.0;
 
-        /// <summary>The death spot: where the route stops and the session ends.</summary>
+        /// <summary>The death spot: where the first run stops and ends.</summary>
         public const double DeathX = 50.0;
         public const double DeathY = LaneY;
+
+        /// <summary>The second run opens here, back in <c>hall</c> at the start.</summary>
+        public const double RespawnSec = 15.0;
+        /// <summary>Where the second run stops walking.</summary>
+        public const double Run2StopX = 10.0;
+        public const double Run2StopSec = 17.25;
+        /// <summary>The second run ends with <c>Quit</c> here, then the session ends.</summary>
+        public const double Run2EndSec = 18.0;
 
         public const string EntityKey = "key";
         public const double KeyX = 30.0;
         public const double KeyY = 8.0;
         public const double KeyClearSec = VaultEntrySec;
 
+        /// <summary>
+        /// True between the first run's end and the respawn: the fixture
+        /// pushes no state then, and the Trace samples nothing.
+        /// </summary>
+        public static bool IsBetweenRuns(double tSec) => tSec >= EndSec && tSec < RespawnSec;
+
+        /// <summary>True from the respawn on: the second run.</summary>
+        public static bool IsSecondRun(double tSec) => tSec >= RespawnSec;
+
         /// <summary>Room id at <paramref name="tSec"/>: the room whose x range holds the player.</summary>
         public static string RoomAt(double tSec)
         {
+            if (IsSecondRun(tSec)) return RoomHall;
             if (tSec < CryptEntrySec) return RoomHall;
             if (tSec < VaultEntrySec) return RoomCrypt;
             return RoomVault;
@@ -82,6 +107,11 @@ namespace Playloop.Samples.TraceFixture
         /// <summary>Player position at <paramref name="tSec"/>.</summary>
         public static (double x, double y) PositionAt(double tSec)
         {
+            if (IsSecondRun(tSec))
+            {
+                if (tSec >= Run2StopSec) return (Run2StopX, LaneY);
+                return (StartX + SpeedUnitsPerSec * (tSec - RespawnSec), LaneY);
+            }
             if (tSec >= StopSec) return (DeathX, DeathY);
             return (StartX + SpeedUnitsPerSec * tSec, LaneY);
         }
@@ -89,6 +119,7 @@ namespace Playloop.Samples.TraceFixture
         /// <summary>Facing in degrees: 0 along +x, 90 (up) through the jump window.</summary>
         public static int FacingAt(double tSec)
         {
+            if (IsSecondRun(tSec)) return 0;
             if (tSec >= JumpStartSec && tSec <= JumpEndSec) return JumpFacingDeg;
             return 0;
         }
@@ -96,6 +127,7 @@ namespace Playloop.Samples.TraceFixture
         /// <summary>Action mask at <paramref name="tSec"/>.</summary>
         public static int ActionBitsAt(double tSec)
         {
+            if (IsSecondRun(tSec)) return tSec >= Run2StopSec ? 0 : BitMove;
             if (tSec >= StopSec) return 0;
             int bits = BitMove;
             if (tSec >= AttackStartSec && tSec <= AttackEndSec) bits |= BitAttack;
@@ -106,10 +138,11 @@ namespace Playloop.Samples.TraceFixture
         /// <summary>Movement axes at <paramref name="tSec"/>: (1, 0) while walking, (0, 0) once stopped.</summary>
         public static (double ax, double ay) AxesAt(double tSec)
         {
+            if (IsSecondRun(tSec)) return tSec >= Run2StopSec ? (0.0, 0.0) : (1.0, 0.0);
             return tSec >= StopSec ? (0.0, 0.0) : (1.0, 0.0);
         }
 
-        /// <summary>The key's position while it exists. False once it has been cleared.</summary>
+        /// <summary>The key's position while it exists. False once it has been cleared; it never comes back.</summary>
         public static bool EntityAt(double tSec, out double x, out double y)
         {
             if (tSec >= KeyClearSec)

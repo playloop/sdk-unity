@@ -188,7 +188,7 @@ The accumulator rides every heartbeat AND fires once as a `session_summary` even
 
 ## Trace
 
-A Trace is sampled session state: where the player is, which room they are in, which abstract actions are held and which way they are moving, plus up to a few named entities, 5 to 20 times a second. You push the latest values; the SDK owns the clock, the packing, and the cadence (one chunk every five seconds, riding the normal telemetry batch as a `trace_chunk` event). That is what ships today. On the Playloop side, Playback reads those chunks as the route the player walked through the rooms, and the per-level view as every session's path with where sessions ended, once those views are available.
+A Trace is sampled session state: where the player is, which room they are in, which abstract actions are held and which way they are moving, plus up to a few named entities, 5 to 20 times a second. You push the latest values; the SDK owns the clock, the packing, and the cadence (one chunk every five seconds, riding the normal telemetry batch as a `trace_chunk` event). That is what ships today. On the Playloop side, Playback reads those chunks as the route the player walked through the rooms, and the per-level view as every session's path with where each run ended, once those views are available.
 
 ```csharp
 // Once, at startup. Bit i of the action mask is labels[i]; up to 16 labels.
@@ -206,13 +206,18 @@ client.Trace.ClearEntity("key");                              // when one despaw
 // Game-side gates: a cutscene, a menu, a bot run.
 client.Trace.Pause();  client.Trace.Resume();
 
-// How the run ended. Quit is sent for you when the session ends.
+// How the run ended. A session can hold many runs; each End closes one.
 client.Trace.End(TraceEndReason.Death);
+
+// The next run. Optional: the next SetPosition opens it too.
+client.Trace.Begin();
 ```
 
 Sampling runs on its own driver once you call `Telemetry.AutoBatch()`; there is nothing to tick. Nothing is sampled until your first `SetPosition`, `SetRoom`, `SetInput` or `SetEntity` call, so a game that never wires the Trace sends no `trace_chunk` and no `trace_state`. The `PlayloopTrace` component (**Add Component → Playloop → Trace**) feeds a Transform's position and heading for you: set `roomId`, pick the plane (`XY` for side-on and 2D, `XZ` for top-down and 3D), and hand it your client with `Attach(client)`. Action bits and axes stay your call, because only the game knows its verbs.
 
-`Trace.Status` says why nothing is flowing: `Active`, `PausedByGame`, `OffByEnvironment`, `OffByOption`, `OffByConfig` (the dashboard's per-event config ignores `trace_chunk`, which is the server-side off switch), `Disabled` (no ingest key), `BudgetExhausted`, or `Ended`. When the Trace is off for the session, the SDK sends one `trace_state` event with the reason so the session page can say so instead of showing an empty frame.
+**Runs.** A session can hold many runs: an arcade game that respawns, a roguelite that starts over, a level select. `End(reason)` closes the current run: the partial chunk goes out with that run's `end` block (where it ended and why), and the Trace waits between runs, sampling nothing. The next run opens on `Begin()` or on your next `SetPosition`, starting a new chunk whose clock restarts at its first sample. `SetRoom`, `SetInput` and `SetEntity` between runs only update the latest values; they do not open a run. A second `End` between runs is ignored, so each run keeps the first reason it was given. Every chunk carries its run index (`seg`), so Playback can show each run's route and where it ended. When the session ends, a run still open ends with `Quit` for you; if the Trace is between runs, nothing more is sent. The `PlayloopTrace` component pushes a position every frame, so with it the next run opens on the frame after `End`; disable the component while the player is dead or in a menu if you want that time left out.
+
+`Trace.Status` says why nothing is flowing: `Active`, `PausedByGame`, `OffByEnvironment`, `OffByOption`, `OffByConfig` (the dashboard's per-event config ignores `trace_chunk`, which is the server-side off switch), `Disabled` (no ingest key), `BudgetExhausted`, `BetweenRuns` (after `End`, before the next run opens), or `Ended` (the session ended; the Trace re-arms with the next session). When the Trace is off for the session, the SDK sends one `trace_state` event with the reason so the session page can say so instead of showing an empty frame.
 
 **Where it is on.** `TraceOptions.Mode` defaults to `Auto`: on everywhere except a `"production"` environment (see [Per-game environments](#per-game-environments)), so development, playtest and demo builds carry it and a shipping release does not. Set `Mode = On` to keep it in production once you have disclosed it, or `Off` to turn it off everywhere. The environment is a slug your build sets, so this default is the SDK's, not the server's. With `SendInEditor` off, editor runs send nothing, like every other event.
 
