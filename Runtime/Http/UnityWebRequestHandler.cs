@@ -13,20 +13,48 @@ namespace Playloop.Http
     /// UnityWebRequest-backed transport. Use this inside Unity. It's the only
     /// HTTP client that works on every Unity target (including WebGL, where
     /// System.Net.Http is unavailable).
+    ///
+    /// <para>
+    /// A UnityWebRequest can only be created on the main thread, and it
+    /// completes from the main loop. The quit hook blocks the main thread
+    /// while the final flush runs on a worker, so for that flush the handler
+    /// switches to <see cref="DefaultHttpHandler"/>, which works from any
+    /// thread (see <see cref="UseThreadSafeTransportForShutdown"/>).
+    /// </para>
     /// </summary>
     public sealed class UnityWebRequestHandler : IHttpHandler
     {
         private readonly int _timeoutSeconds;
+        private volatile IHttpHandler? _shutdownTransport;
 
         public UnityWebRequestHandler(int timeoutSeconds = 30)
         {
             _timeoutSeconds = timeoutSeconds;
         }
 
-        public void Dispose() { /* no shared state */ }
+        /// <summary>
+        /// Send every later request through System.Net.Http instead. Called
+        /// by the quit hook just before it runs the session end on a worker
+        /// thread and waits for it. Never on WebGL, which has no
+        /// System.Net.Http and whose quit hook does not block.
+        /// </summary>
+        internal void UseThreadSafeTransportForShutdown()
+        {
+            if (_shutdownTransport == null) _shutdownTransport = new DefaultHttpHandler(_timeoutSeconds);
+        }
+
+        public void Dispose()
+        {
+            var shutdown = _shutdownTransport;
+            _shutdownTransport = null;
+            shutdown?.Dispose();
+        }
 
         public Task<HttpResponseData> SendAsync(HttpRequestSpec request, CancellationToken cancellationToken)
         {
+            var shutdown = _shutdownTransport;
+            if (shutdown != null) return shutdown.SendAsync(request, cancellationToken);
+
             var tcs = new TaskCompletionSource<HttpResponseData>();
             UnityWebRequest unityRequest = Build(request);
             unityRequest.timeout = _timeoutSeconds;

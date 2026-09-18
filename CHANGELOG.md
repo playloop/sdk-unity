@@ -53,6 +53,13 @@ where sessions ended, once those views are available.
   event says why. A session end whose flush fails stays pending, with its
   events requeued, until a later flush delivers it; the Trace re-arms only
   then, so a new session never carries the old session's final chunk.
+- The quit hook (`Application.quitting`, and leaving Play mode in the
+  editor) delivers its final flush again with the default Unity transport.
+  It runs the session end on a worker while the main thread waits, and a
+  UnityWebRequest cannot be created off the main thread, so the flush
+  carrying `sessionEnded` and the Trace's last end block was dropped
+  silently. The transport now switches to System.Net.Http for that flush
+  (not on WebGL, whose quit hook does not wait).
 - The entity cap counts distinct names per session, so a name that despawns
   and returns takes no second slot, and a new session counts over from the
   names it carries. Declared room bounds are remembered for up to 1,024 rooms

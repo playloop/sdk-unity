@@ -50,6 +50,11 @@ namespace Playloop
         // Crash handler handle, kept so Dispose can tear the trap down.
         private CrashHandler.Handle? _crashHandlerHandle;
         private readonly bool _enableCrashReporting;
+#if UNITY_2018_1_OR_NEWER && !PLAYLOOP_DOTNET_STANDALONE
+        // The Unity transport, when it is the one in use, so the quit hook can
+        // switch it to a thread-safe transport for the final flush.
+        private readonly UnityWebRequestHandler? _unityHandler;
+#endif
 
         // Keep the SDK version in lockstep with `package.json`. Stamped
         // on every `session_start` event so the dashboard can surface
@@ -237,6 +242,9 @@ namespace Playloop
             // Retries live in the wrapper so every handler, including
             // MockHttpHandler in tests, gets the same contract for free.
             var rawHandler = options.Http ?? PickDefaultHandler(options.TimeoutSeconds);
+#if UNITY_2018_1_OR_NEWER && !PLAYLOOP_DOTNET_STANDALONE
+            _unityHandler = rawHandler as UnityWebRequestHandler;
+#endif
             _httpHandler = new RetryingHttpHandler(
                 rawHandler,
                 options.BuildRetryPolicy(),
@@ -700,7 +708,7 @@ namespace Playloop
         /// we explicitly Task.Run + Wait: the standard pattern for flushing
         /// a final analytics/telemetry POST on the quit path.
         /// </summary>
-        private void OnApplicationQuitting()
+        internal void OnApplicationQuitting()
         {
             if (_disposed) return;
             // Stop the heartbeat timer first so it doesn't race with
@@ -739,6 +747,13 @@ namespace Playloop
                 Dispose();
             }
 #else
+            // The session end below runs on a worker while this thread waits
+            // for it. A UnityWebRequest can only be created on the main
+            // thread (and completes from the main loop), so from a worker it
+            // throws and the final flush, with sessionEnded and the Trace's
+            // end block, never leaves. Switch to the thread-safe transport
+            // first.
+            _unityHandler?.UseThreadSafeTransportForShutdown();
             try
             {
                 var shutdown = System.Threading.Tasks.Task.Run(async () =>
