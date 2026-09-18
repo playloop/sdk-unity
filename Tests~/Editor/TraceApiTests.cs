@@ -503,6 +503,255 @@ namespace Playloop.Tests
             CollectionAssert.DoesNotContain(ents2, "e1", "a despawn pending at the reset is not written into the new session");
         }
 
+        // ───────────────────────── runs ─────────────────────────
+
+        private static TraceSampler NewSampler(List<Dictionary<string, object>> chunks)
+            => new TraceSampler(10, TracePlane.XY, 8, TraceOptions.DefaultMaxBytesPerSession, (c, t0) => chunks.Add(c));
+
+        private static List<object[]> Rows(Dictionary<string, object> chunk)
+            => ((object[])chunk["s"]).Cast<object[]>().ToList();
+
+        [Test]
+        public void End_ThenSetPosition_OpensTheNextRunInANewChunk()
+        {
+            var chunks = new List<Dictionary<string, object>>();
+            var sampler = NewSampler(chunks);
+            sampler.SetRoom("hall", null);
+            sampler.SetPosition(1, 1, 0);
+            sampler.Tick(0.0, Wall);
+            sampler.Tick(0.1, Wall + 100);
+            sampler.End(TraceEndReason.Death);
+            Assert.AreEqual(1, chunks.Count);
+            Assert.AreEqual(0, chunks[0]["seg"]);
+            Assert.AreEqual("death", ((Dictionary<string, object>)chunks[0]["end"])["reason"]);
+
+            // Ticks between runs sample nothing.
+            for (int ms = 200; ms < 2000; ms += 100) sampler.Tick(ms / 1000.0, Wall + ms);
+
+            sampler.SetPosition(3, 3, 0);
+            sampler.Tick(2.05, Wall + 2050);
+            sampler.Tick(2.15, Wall + 2150);
+            sampler.End(TraceEndReason.Quit);
+
+            Assert.AreEqual(2, chunks.Count, "the new run starts its own chunk");
+            var run1 = chunks[1];
+            Assert.AreEqual(1, run1["seq"]);
+            Assert.AreEqual(1, run1["seg"]);
+            Assert.AreEqual(Wall + 2050, run1["t0"], "re-anchored at the new run's first tick");
+            CollectionAssert.AreEqual(new long[] { 0, 100 }, Rows(run1).Select(r => (long)r[0]).ToArray());
+            Assert.AreEqual(3L, Rows(run1)[0][1]);
+            Assert.IsFalse(run1.ContainsKey("acts"), "a new run does not repeat acts");
+            Assert.AreEqual("quit", ((Dictionary<string, object>)run1["end"])["reason"]);
+            Assert.AreEqual("hall", ((Dictionary<string, object>)((object[])run1["rooms"])[0])["id"], "the room carries over");
+        }
+
+        [Test]
+        public void EveryChunk_WritesSeg_EvenZero_InWireOrder()
+        {
+            var chunks = new List<Dictionary<string, object>>();
+            var sampler = NewSampler(chunks);
+            sampler.SetPosition(0, 0, -1);
+            sampler.Tick(0.0, Wall);
+            sampler.End(TraceEndReason.Quit);
+            CollectionAssert.AreEqual(new[] { "v", "seq", "seg", "t0", "hz", "plane" }, chunks[0].Keys.Take(6).ToArray());
+            Assert.AreEqual(0, chunks[0]["seg"]);
+        }
+
+        [Test]
+        public void End_Twice_WritesOneEndBlock_AndKeepsTheFirstReason()
+        {
+            var chunks = new List<Dictionary<string, object>>();
+            var sampler = NewSampler(chunks);
+            sampler.SetPosition(0, 0, -1);
+            sampler.Tick(0.0, Wall);
+            sampler.End(TraceEndReason.Death);
+            sampler.End(TraceEndReason.Quit);
+            sampler.End(TraceEndReason.Timeout);
+            Assert.AreEqual(1, chunks.Count);
+            Assert.AreEqual("death", ((Dictionary<string, object>)chunks[0]["end"])["reason"]);
+        }
+
+        [Test]
+        public void BetweenRuns_SetRoomInputEntity_DoNotOpenARun()
+        {
+            var chunks = new List<Dictionary<string, object>>();
+            var sampler = NewSampler(chunks);
+            sampler.SetPosition(0, 0, -1);
+            sampler.Tick(0.0, Wall);
+            sampler.End(TraceEndReason.Death);
+
+            sampler.SetRoom("crypt", null);
+            sampler.SetInput(1, 1, 0);
+            sampler.SetEntity("key", 4, 4);
+            for (int ms = 100; ms < 3000; ms += 100) sampler.Tick(ms / 1000.0, Wall + ms);
+
+            Assert.IsTrue(sampler.IsBetweenRuns);
+            Assert.AreEqual(1, chunks.Count, "nothing sampled between runs");
+
+            // The latest values were kept: the run that opens next uses them.
+            sampler.SetPosition(5, 5, 0);
+            sampler.Tick(3.0, Wall + 3000);
+            sampler.End(TraceEndReason.Quit);
+            var row = Rows(chunks[1]).Single();
+            Assert.AreEqual("crypt", ((Dictionary<string, object>)((object[])chunks[1]["rooms"])[0])["id"]);
+            Assert.AreEqual(1, row[5]);
+            CollectionAssert.AreEqual(new[] { "key" }, (string[])chunks[1]["ents"]);
+        }
+
+        [Test]
+        public void Begin_OpensARun_AndIsANoOpWhileOneIsOpen()
+        {
+            var chunks = new List<Dictionary<string, object>>();
+            var sampler = NewSampler(chunks);
+            sampler.SetPosition(0, 0, -1);
+            sampler.Begin(); // the first run is already open
+            sampler.Tick(0.0, Wall);
+            sampler.Tick(0.1, Wall + 100);
+            sampler.Begin(); // still a no-op mid-run: no new chunk, no clock reset
+            sampler.Tick(0.2, Wall + 200);
+            sampler.End(TraceEndReason.Death);
+            Assert.AreEqual(1, chunks.Count);
+            CollectionAssert.AreEqual(new long[] { 0, 100, 200 }, Rows(chunks[0]).Select(r => (long)r[0]).ToArray());
+
+            sampler.Begin();
+            Assert.IsFalse(sampler.IsBetweenRuns);
+            Assert.AreEqual(1, sampler.Segment);
+            sampler.Tick(5.0, Wall + 5000);
+            sampler.End(TraceEndReason.LevelComplete);
+            Assert.AreEqual(2, chunks.Count);
+            Assert.AreEqual(1, chunks[1]["seg"]);
+            Assert.AreEqual(Wall + 5000, chunks[1]["t0"]);
+            Assert.AreEqual(0L, Rows(chunks[1])[0][0]);
+        }
+
+        [Test]
+        public void ARunThatTookNoSample_WritesNothing_AndTakesNoSeg()
+        {
+            var chunks = new List<Dictionary<string, object>>();
+            var sampler = NewSampler(chunks);
+            sampler.SetPosition(0, 0, -1);
+            sampler.Tick(0.0, Wall);
+            sampler.End(TraceEndReason.Death);
+            sampler.Begin();
+            sampler.End(TraceEndReason.Death); // respawned and died before a tick
+            sampler.Begin();
+            sampler.Tick(1.0, Wall + 1000);
+            sampler.End(TraceEndReason.Quit);
+            Assert.AreEqual(2, chunks.Count);
+            Assert.AreEqual(1, chunks[1]["seg"], "seg counts runs that reached the wire");
+        }
+
+        [Test]
+        public void Entities_ADespawnPendingAtEnd_IsDropped_LiveOnesCarryOver()
+        {
+            var chunks = new List<Dictionary<string, object>>();
+            var sampler = NewSampler(chunks);
+            sampler.SetEntity("key", 1, 1);
+            sampler.SetEntity("bat", 2, 2);
+            sampler.Tick(0.0, Wall);
+            sampler.ClearEntity("bat");
+            sampler.End(TraceEndReason.Death);
+
+            sampler.Begin();
+            sampler.Tick(1.0, Wall + 1000);
+            sampler.End(TraceEndReason.Quit);
+
+            CollectionAssert.AreEqual(new[] { "key" }, (string[])chunks[1]["ents"], "bat's despawn belonged to the run that ended");
+            var rows = ((object[])chunks[1]["e"]).Cast<object?[]>().ToList();
+            CollectionAssert.AreEqual(new object?[] { 0, 0, 1L, 1L }, rows.Single(), "the live key is emitted once in the new run");
+        }
+
+        [Test]
+        public void SessionEnd_BetweenRuns_WritesNoExtraChunk()
+        {
+            var handler = MockHttpHandler.ReturnsJson("{\"sessionId\":\"s1\"}");
+            using var client = NewClient(handler);
+            client.Telemetry.StartSession();
+            client.Trace.SetPosition(1f, 1f);
+            client.Trace.Tick(0.0, Wall);
+            client.Trace.End(TraceEndReason.Death);
+            client.Telemetry.EndSessionAsync().GetAwaiter().GetResult();
+
+            var body = JObject.Parse(Encoding.UTF8.GetString(handler.Calls.Single(c => c.Url.EndsWith("/api/telemetry", StringComparison.Ordinal)).JsonBody!));
+            var chunks = body["events"]!.Where(e => e["name"]!.Value<string>() == "trace_chunk").ToList();
+            Assert.AreEqual(1, chunks.Count, "the run already had its end; the session end adds nothing");
+            Assert.AreEqual("death", chunks[0]["data"]!["end"]!["reason"]!.Value<string>());
+            Assert.AreEqual(1, body["traceChunks"]!.Value<int>());
+        }
+
+        [Test]
+        public void SessionEnd_MidRun_WritesEndQuitOnThatRun()
+        {
+            var handler = MockHttpHandler.ReturnsJson("{\"sessionId\":\"s1\"}");
+            using var client = NewClient(handler);
+            client.Telemetry.StartSession();
+            client.Trace.SetPosition(1f, 1f);
+            client.Trace.Tick(0.0, Wall);
+            client.Trace.End(TraceEndReason.Death);
+            client.Trace.SetPosition(2f, 2f);
+            client.Trace.Tick(1.0, Wall + 1000);
+            client.Telemetry.EndSessionAsync().GetAwaiter().GetResult();
+
+            var body = JObject.Parse(Encoding.UTF8.GetString(handler.Calls.Single(c => c.Url.EndsWith("/api/telemetry", StringComparison.Ordinal)).JsonBody!));
+            var chunks = body["events"]!.Where(e => e["name"]!.Value<string>() == "trace_chunk").Select(e => e["data"]!).ToList();
+            Assert.AreEqual(2, chunks.Count);
+            Assert.AreEqual(1, chunks[1]["seg"]!.Value<int>());
+            Assert.AreEqual("quit", chunks[1]["end"]!["reason"]!.Value<string>());
+            Assert.AreEqual(2, body["traceChunks"]!.Value<int>(), "the count is every chunk the session sent");
+        }
+
+        [Test]
+        public void Status_ActiveThenBetweenRunsThenActive_EndedAtTheSessionEnd()
+        {
+            var handler = new MockHttpHandler { Responder = _ => new Http.HttpResponseData(500, "{}", new Dictionary<string, string> { ["content-type"] = "application/json" }) };
+            using var client = NewClient(handler);
+            client.Telemetry.StartSession();
+            client.Trace.SetPosition(1f, 1f);
+            client.Trace.Tick(0.0, Wall);
+            Assert.AreEqual(TraceStatus.Active, client.Trace.Status);
+
+            client.Trace.End(TraceEndReason.Death);
+            Assert.AreEqual(TraceStatus.BetweenRuns, client.Trace.Status);
+            Assert.IsFalse(client.Trace.IsActive);
+
+            client.Trace.Pause();
+            Assert.AreEqual(TraceStatus.BetweenRuns, client.Trace.Status, "no run to pause");
+            client.Trace.Begin();
+            Assert.AreEqual(TraceStatus.PausedByGame, client.Trace.Status);
+            client.Trace.Resume();
+            Assert.AreEqual(TraceStatus.Active, client.Trace.Status);
+
+            // A failed end leaves the session ended until the server takes it.
+            Assert.ThrowsAsync<PlayloopException>(async () => await client.Telemetry.EndSessionAsync());
+            Assert.AreEqual(TraceStatus.Ended, client.Trace.Status);
+            client.Trace.SetPosition(3f, 3f);
+            client.Trace.Begin();
+            Assert.AreEqual(TraceStatus.Ended, client.Trace.Status, "no run opens after the session end");
+        }
+
+        [Test]
+        public void ResetForNewSession_ResetsSeqAndSeg()
+        {
+            var chunks = new List<Dictionary<string, object>>();
+            var sampler = NewSampler(chunks);
+            sampler.SetPosition(0, 0, -1);
+            sampler.Tick(0.0, Wall);
+            sampler.End(TraceEndReason.Death);
+            sampler.SetPosition(1, 1, -1);
+            sampler.Tick(1.0, Wall + 1000);
+            sampler.EndSession();
+            Assert.AreEqual(1, chunks[1]["seg"]);
+            Assert.AreEqual("quit", ((Dictionary<string, object>)chunks[1]["end"])["reason"]);
+
+            sampler.ResetForNewSession();
+            Assert.AreEqual(0, sampler.Segment);
+            Assert.IsFalse(sampler.IsBetweenRuns);
+            sampler.Tick(10.0, Wall + 10000);
+            sampler.End(TraceEndReason.Quit);
+            Assert.AreEqual(0, chunks[2]["seq"]);
+            Assert.AreEqual(0, chunks[2]["seg"]);
+        }
+
         [Test]
         public void Rooms_BoundsCacheIsCappedPerClient_RoomsStillSampled()
         {
