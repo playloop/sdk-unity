@@ -301,15 +301,16 @@ namespace Playloop.Telemetry
             }
 
             // Close the Trace first so its final chunk rides the same flush
-            // that carries sessionEnded. Idempotent: a game that already
-            // called End(Death) or End(LevelComplete) keeps that reason.
+            // that carries sessionEnded. A run still open ends with Quit; a
+            // game that already closed its last run with End(Death) or
+            // End(LevelComplete) keeps that reason and nothing more is written.
             //
             // ⚠️ ORDER IS LOAD-BEARING: this runs BEFORE _endRequested is set. Track parks
             // events once an end is requested, because they belong to the NEXT session, and
             // the Trace's final chunk is the one event that must NOT be parked: it is the
             // ending session's last word and has to ride the flush carrying sessionEnded.
             // Marking the end first parked it and broke both EndFromSessionEnd tests.
-            try { _trace?.End(Playloop.Trace.TraceEndReason.Quit); }
+            try { _trace?.EndSession(); }
             catch { /* the Trace must never block the session end */ }
 
             lock (_bufferLock)

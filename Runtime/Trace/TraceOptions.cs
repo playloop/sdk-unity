@@ -26,8 +26,8 @@ namespace Playloop.Trace
     }
 
     /// <summary>
-    /// Why a Trace ended. Written into the final chunk so Playback can mark
-    /// where the session ended and why.
+    /// Why a run ended. Written into the run's last chunk so Playback can
+    /// mark where each run ended and why.
     /// </summary>
     public enum TraceEndReason
     {
@@ -56,7 +56,13 @@ namespace Playloop.Trace
         Disabled,
         /// <summary>The per-session byte budget was reached.</summary>
         BudgetExhausted,
-        /// <summary><see cref="TraceApi.End"/> was called.</summary>
+        /// <summary>
+        /// <see cref="TraceApi.End"/> closed a run and the next one has not
+        /// opened yet (<see cref="TraceApi.Begin"/> or the next
+        /// <see cref="TraceApi.SetPosition"/> opens it).
+        /// </summary>
+        BetweenRuns,
+        /// <summary>The session ended. The Trace re-arms with the next session.</summary>
         Ended,
     }
 

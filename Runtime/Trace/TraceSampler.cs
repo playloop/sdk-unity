@@ -21,13 +21,24 @@ namespace Playloop.Trace
     /// </para>
     ///
     /// <para>
-    /// Chunk document (format version 1): <c>v</c>, <c>seq</c>, <c>t0</c>
-    /// (unix ms of the chunk's first sample), <c>hz</c>, <c>plane</c>,
-    /// <c>acts</c> (first chunk and after every redefine), per-chunk
-    /// <c>rooms</c> and <c>ents</c> tables, <c>s</c> sample rows of exactly
-    /// eight numbers <c>[dt, x, y, f, r, a, ax, ay]</c>, sparse entity rows
-    /// <c>e</c> of <c>[sampleIndex, entityIndex, x, y]</c>, and an
-    /// <c>end</c> block on the final chunk only.
+    /// A session holds one or more runs. <see cref="End"/> closes the current
+    /// run and the sampler goes between runs, sampling nothing; the next run
+    /// opens on <see cref="Begin"/> or on the next <see cref="SetPosition"/>.
+    /// Each run starts a new chunk whose clock is re-anchored at its first
+    /// tick. <see cref="EndSession"/> closes whatever run is open and stops
+    /// the sampler until <see cref="ResetForNewSession"/>.
+    /// </para>
+    ///
+    /// <para>
+    /// Chunk document (format version 1), keys in this order: <c>v</c>,
+    /// <c>seq</c> (per session, counting across runs), <c>seg</c> (the
+    /// 0-based run index, always written), <c>t0</c> (unix ms of the chunk's
+    /// first sample), <c>hz</c>, <c>plane</c>, <c>acts</c> (first chunk and
+    /// after every redefine), per-chunk <c>rooms</c> and <c>ents</c> tables,
+    /// <c>s</c> sample rows of exactly eight numbers
+    /// <c>[dt, x, y, f, r, a, ax, ay]</c>, sparse entity rows <c>e</c> of
+    /// <c>[sampleIndex, entityIndex, x, y]</c>, and an <c>end</c> block on
+    /// the last chunk of each run.
     /// </para>
     /// </summary>
     public sealed class TraceSampler
@@ -105,7 +116,7 @@ namespace Playloop.Trace
         private readonly List<object> _chunkRoomEntries = new List<object>();
         private readonly List<string> _chunkEnts = new List<string>();
 
-        // Last sample, for the end block.
+        // Last sample of the current run, for the end block.
         private bool _hasSample;
         private int _lastR;
         private object _lastX = 0L;
@@ -118,9 +129,11 @@ namespace Playloop.Trace
         private bool _hasTicked;
         private double _nextSampleSec;
         private int _seq;
+        private int _seg;
         private long _bytesSent;
         private bool _budgetExhausted;
-        private bool _ended;
+        private bool _betweenRuns;
+        private bool _sessionEnded;
         private bool _paused;
 
         public TraceSampler(int hz, TracePlane plane, int maxEntities, long maxBytesPerSession, ChunkSink sink)
@@ -143,8 +156,20 @@ namespace Playloop.Trace
         /// <summary>Chunks emitted so far in this session (the next chunk's <c>seq</c>).</summary>
         public int ChunkCount => _seq;
 
+        /// <summary>The current run's index: the <c>seg</c> of its chunks.</summary>
+        public int Segment => _seg;
+
         public bool IsPaused => _paused;
-        public bool IsEnded => _ended;
+
+        /// <summary>
+        /// True after <see cref="End"/> closed a run and before the next one
+        /// opens. Nothing is sampled between runs.
+        /// </summary>
+        public bool IsBetweenRuns => _betweenRuns && !_sessionEnded;
+
+        /// <summary>True after <see cref="EndSession"/>, until <see cref="ResetForNewSession"/>.</summary>
+        public bool IsSessionEnded => _sessionEnded;
+
         public bool BudgetExhausted => _budgetExhausted;
 
         /// <summary>
@@ -180,12 +205,17 @@ namespace Playloop.Trace
             _roomBounds[roomId] = new[] { Q2(b.XMin), Q2(b.YMin), Q2(b.XMax), Q2(b.YMax) };
         }
 
+        /// <summary>
+        /// Latest position. Between runs this also opens the next run: a
+        /// player who has a position again is playing again.
+        /// </summary>
         public void SetPosition(double x, double y, int facing)
         {
             _wired = true;
             _x = x;
             _y = y;
             _facing = facing;
+            if (_betweenRuns) Begin();
         }
 
         public void SetInput(int actionBits, double axisX, double axisY)
@@ -231,6 +261,24 @@ namespace Playloop.Trace
             if (en != null) en.Despawn = true;
         }
 
+        /// <summary>
+        /// Open the next run after <see cref="End"/>. A no-op while a run is
+        /// open (the first run opens by itself) and after the session ended.
+        /// </summary>
+        public void Begin()
+        {
+            if (!_betweenRuns || _sessionEnded) return;
+            _betweenRuns = false;
+            // The new run's first tick is sample zero of a new chunk.
+            _hasTicked = false;
+            _hasSample = false;
+            // A despawn still pending belongs to the run that ended: the new
+            // run never saw that entity, so it is dropped rather than written
+            // as a despawn row. Live entities carry over and are emitted once
+            // in the new run's first chunk.
+            _entities.RemoveAll(en => en.Despawn);
+        }
+
         public void Pause() => _paused = true;
 
         public void Resume() => _paused = false;
@@ -246,7 +294,7 @@ namespace Playloop.Trace
         public void Tick(double unscaledSec, long nowUnixMs)
         {
             if (!_wired) return;
-            if (_ended || _budgetExhausted || _paused) return;
+            if (_sessionEnded || _betweenRuns || _budgetExhausted || _paused) return;
             if (double.IsNaN(unscaledSec) || double.IsInfinity(unscaledSec)) return;
 
             if (!_hasTicked)
@@ -266,29 +314,45 @@ namespace Playloop.Trace
         }
 
         /// <summary>
-        /// Close the Trace with a reason. Flushes the open chunk with the
-        /// <c>end</c> block; idempotent.
+        /// Close the current run with a reason. Flushes the open chunk with
+        /// the <c>end</c> block and goes between runs. A run that took no
+        /// sample writes nothing. Idempotent per run: a second call between
+        /// runs is a no-op.
         /// </summary>
         public void End(TraceEndReason reason)
         {
-            if (_ended) return;
-            _ended = true;
-            if (_budgetExhausted) return;
+            if (_betweenRuns || _sessionEnded) return;
+            _betweenRuns = true;
+            if (_budgetExhausted || !_hasSample) return;
 
             if (!_chunkOpen)
             {
-                if (!_hasSample) return;
                 OpenChunk(0.0, _lastSampleWallMs);
                 _lastDt = 0;
                 _lastR = RoomIndex(_lastRoomId);
             }
             Flush(ReasonWord(reason));
+            _seg++;
+        }
+
+        /// <summary>
+        /// The session is ending: close the open run with
+        /// <see cref="TraceEndReason.Quit"/> and stop until
+        /// <see cref="ResetForNewSession"/>. Between runs this writes
+        /// nothing, because the last run already has its end.
+        /// </summary>
+        public void EndSession()
+        {
+            if (_sessionEnded) return;
+            End(TraceEndReason.Quit);
+            _sessionEnded = true;
         }
 
         /// <summary>
         /// Re-arm for the next session on the same client: the wire state
-        /// resets (seq, budget, end) while the game's declared rooms, actions
-        /// and entities carry over.
+        /// resets (seq, seg, budget, end) while the game's declared rooms,
+        /// actions and entities carry over. The new session opens its first
+        /// run straight away.
         /// </summary>
         public void ResetForNewSession()
         {
@@ -301,9 +365,11 @@ namespace Playloop.Trace
             _hasSample = false;
             _hasTicked = false;
             _seq = 0;
+            _seg = 0;
             _bytesSent = 0;
             _budgetExhausted = false;
-            _ended = false;
+            _betweenRuns = false;
+            _sessionEnded = false;
             _actionsDirty = true;
             _warnedEntityCap = false;
             // A despawn still pending belongs to the session that just ended:
@@ -394,6 +460,7 @@ namespace Playloop.Trace
             {
                 ["v"] = FormatVersion,
                 ["seq"] = _seq,
+                ["seg"] = _seg,
                 ["t0"] = _t0,
                 ["hz"] = _hz,
                 ["plane"] = _plane,

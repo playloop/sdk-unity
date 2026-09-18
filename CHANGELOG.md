@@ -25,7 +25,8 @@ Playloop side those chunks become the route the player walked and, per level,
 where sessions ended, once those views are available.
 
 - `TraceApi`: `DefineActions`, `SetRoom`, `SetPosition`, `SetInput`,
-  `SetEntity` / `ClearEntity`, `Pause` / `Resume`, `End(reason)`, `Status`,
+  `SetEntity` / `ClearEntity`, `Pause` / `Resume`, `End(reason)`, `Begin()`,
+  `Status`,
   and the sampling seam `Tick(unscaledSec)`. Every string is a validated
   slug; sample rows are eight numbers; nothing takes an engine type.
 - Sampling starts with the game's first state call (`SetPosition`,
@@ -39,12 +40,26 @@ where sessions ended, once those views are available.
   `"production"` environment.
 - `PlayloopTrace` component (**Playloop → Trace**), the package's first
   Inspector-facing MonoBehaviour: feeds a Transform's position and heading.
-- The session end closes the Trace with `Quit` and stamps the chunk count on
+- Runs: a session can hold many. `End(reason)` closes the current run with
+  its own `end` block and the Trace waits between runs
+  (`TraceStatus.BetweenRuns`); the next run opens on `Begin()` or the next
+  `SetPosition` and starts a new chunk with its clock re-anchored. Every
+  chunk carries its run index as `seg`. A second `End` between runs is
+  ignored.
+- The session end closes a run still open with `Quit` (nothing more if the
+  Trace is between runs) and stamps the chunk count on
   the final flush, as a top-level `traceChunks` field and in
   `sessionMetadata`; when the Trace is off for a session, one `trace_state`
   event says why. A session end whose flush fails stays pending, with its
   events requeued, until a later flush delivers it; the Trace re-arms only
   then, so a new session never carries the old session's final chunk.
+- The quit hook (`Application.quitting`, and leaving Play mode in the
+  editor) delivers its final flush again with the default Unity transport.
+  It runs the session end on a worker while the main thread waits, and a
+  UnityWebRequest cannot be created off the main thread, so the flush
+  carrying `sessionEnded` and the Trace's last end block was dropped
+  silently. The transport now switches to System.Net.Http for that flush
+  (not on WebGL, whose quit hook does not wait).
 - The entity cap counts distinct names per session, so a name that despawns
   and returns takes no second slot, and a new session counts over from the
   names it carries. Declared room bounds are remembered for up to 1,024 rooms
@@ -52,8 +67,9 @@ where sessions ended, once those views are available.
 - `PlayloopTrace` projects on the client's `TraceOptions.Plane`; `Attach`
   adopts it into the component and warns if the Inspector value differed.
 - **Trace Fixture** sample: a tiny scripted game that walks a known path
-  through three rooms and dies at (50, 5) in `vault`, with a committed golden
-  of its three chunks so every engine's fixture can be checked byte for byte.
+  through three rooms and dies at (50, 5) in `vault`, then respawns for a
+  short second run that quits at (10, 5) in `hall`, with a committed golden
+  of its four chunks so every engine's fixture can be checked byte for byte.
 - README: a Trace section and "What the Trace sends", the sentence to link
   from a store privacy field.
 

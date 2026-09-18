@@ -27,6 +27,14 @@ namespace Playloop.Trace
     /// <see cref="SetInput"/> or <see cref="SetEntity"/>): a game that never
     /// wires the Trace sends no <c>trace_chunk</c> and no <c>trace_state</c>.
     /// </para>
+    ///
+    /// <para>
+    /// A session can hold many runs. <see cref="End"/> closes the current run
+    /// with a reason and the Trace waits between runs; the next run opens on
+    /// <see cref="Begin"/> or on the next <see cref="SetPosition"/>. Every
+    /// chunk carries its run index (<c>seg</c>), and the last chunk of each
+    /// run carries that run's <c>end</c> block.
+    /// </para>
     /// </summary>
     public sealed class TraceApi
     {
@@ -36,7 +44,10 @@ namespace Playloop.Trace
         private readonly TelemetryApi _telemetry;
         private readonly TraceSampler? _sampler;
         private readonly TraceStatus _baseStatus;
-        private TraceStatus _status;
+        // Set when the Trace stops for a reason the sampler does not know
+        // about (the dashboard config) or stops for the rest of the session
+        // (the budget). Null while the sampler's own state decides.
+        private TraceStatus? _stopped;
         private string? _offReason;
         private bool _stateReported;
 
@@ -74,7 +85,6 @@ namespace Playloop.Trace
                     Warn = WarnOnce,
                 };
             }
-            _status = _baseStatus;
             Hz = _sampler?.Hz ?? Math.Max(TraceOptions.MinHz, Math.Min(TraceOptions.MaxHz, options.Hz));
         }
 
@@ -82,10 +92,21 @@ namespace Playloop.Trace
         /// Why nothing is flowing, or <see cref="TraceStatus.Active"/>: the
         /// Trace is on, and samples flow from the first state call.
         /// </summary>
-        public TraceStatus Status => _status;
+        public TraceStatus Status
+        {
+            get
+            {
+                if (_sampler == null) return _baseStatus;
+                if (_stopped.HasValue) return _stopped.Value;
+                if (_sampler.IsSessionEnded) return TraceStatus.Ended;
+                if (_sampler.IsBetweenRuns) return TraceStatus.BetweenRuns;
+                if (_sampler.IsPaused) return TraceStatus.PausedByGame;
+                return TraceStatus.Active;
+            }
+        }
 
-        /// <summary>True when the Trace is on for this session.</summary>
-        public bool IsActive => _status == TraceStatus.Active;
+        /// <summary>True when the Trace is sampling, or will from the first state call.</summary>
+        public bool IsActive => Status == TraceStatus.Active;
 
         /// <summary>The plane <see cref="SetPosition"/> coordinates are on.</summary>
         public TracePlane Plane { get; }
@@ -145,6 +166,8 @@ namespace Playloop.Trace
         /// <summary>
         /// Latest position on the declared plane, with an optional facing in
         /// degrees (0 along +x, 90 along +y). Pass <c>-1</c> for unknown.
+        /// Between runs this also opens the next run, the same as
+        /// <see cref="Begin"/>.
         /// </summary>
         public void SetPosition(float x, float y, float facingDeg = -1f)
         {
@@ -195,7 +218,6 @@ namespace Playloop.Trace
         {
             if (_sampler == null) return;
             _sampler.Pause();
-            if (_status == TraceStatus.Active) _status = TraceStatus.PausedByGame;
         }
 
         /// <summary>Resume sampling after <see cref="Pause"/>.</summary>
@@ -203,22 +225,46 @@ namespace Playloop.Trace
         {
             if (_sampler == null) return;
             _sampler.Resume();
-            if (_status == TraceStatus.PausedByGame) _status = TraceStatus.Active;
         }
 
         /// <summary>
-        /// Close the Trace with a reason. Sends the partial chunk with the
-        /// <c>end</c> block. Idempotent; the session end calls it with
-        /// <see cref="TraceEndReason.Quit"/> for you.
+        /// Close the current run with a reason: a death, a cleared level, a
+        /// quit to menu. Sends the partial chunk with the run's <c>end</c>
+        /// block, then the Trace waits between runs and samples nothing until
+        /// the next run opens (<see cref="Begin"/> or the next
+        /// <see cref="SetPosition"/>). A second call between runs is a no-op,
+        /// so each run keeps the first reason it was given. The session end
+        /// closes a run still open with <see cref="TraceEndReason.Quit"/> for
+        /// you.
         /// </summary>
         public void End(TraceEndReason reason)
         {
             if (_sampler == null) return;
             _sampler.End(reason);
-            if (_status == TraceStatus.Active || _status == TraceStatus.PausedByGame)
-            {
-                _status = TraceStatus.Ended;
-            }
+        }
+
+        /// <summary>
+        /// Open the next run after <see cref="End"/>, for example on a
+        /// respawn. The new run starts a new chunk whose clock restarts at
+        /// its first sample. Optional: the next <see cref="SetPosition"/>
+        /// opens the run too. A no-op while a run is open; the first run of a
+        /// session opens by itself.
+        /// </summary>
+        public void Begin()
+        {
+            if (_sampler == null) return;
+            _sampler.Begin();
+        }
+
+        /// <summary>
+        /// The session is ending: close a run still open with
+        /// <see cref="TraceEndReason.Quit"/>, or write nothing if the Trace
+        /// is between runs. Called by the session end.
+        /// </summary>
+        internal void EndSession()
+        {
+            if (_sampler == null) return;
+            _sampler.EndSession();
         }
 
         /// <summary>
@@ -231,7 +277,7 @@ namespace Playloop.Trace
         internal void Tick(double unscaledSec, long nowUnixMs)
         {
             if (_sampler == null) { ReportStateOnce(); return; }
-            if (_status == TraceStatus.OffByConfig || _status == TraceStatus.BudgetExhausted) return;
+            if (_stopped.HasValue) return;
 
             // An unwired game sends nothing at all, not even the config note:
             // there is no Trace to report on until the game pushes state.
@@ -239,7 +285,7 @@ namespace Playloop.Trace
 
             if (_telemetry.IsEventIgnored(ChunkEventName))
             {
-                _status = TraceStatus.OffByConfig;
+                _stopped = TraceStatus.OffByConfig;
                 _offReason = "config";
                 _sampler.Pause();
                 ReportStateOnce();
@@ -250,7 +296,7 @@ namespace Playloop.Trace
 
             if (_sampler.BudgetExhausted)
             {
-                _status = TraceStatus.BudgetExhausted;
+                _stopped = TraceStatus.BudgetExhausted;
                 _offReason = "budget";
                 ReportStateOnce();
             }
@@ -262,9 +308,10 @@ namespace Playloop.Trace
             if (_sampler == null) return;
             _sampler.ResetForNewSession();
             _stateReported = false;
-            if (_status == TraceStatus.Ended || _status == TraceStatus.BudgetExhausted)
+            // The budget is per session; the dashboard config is not.
+            if (_stopped == TraceStatus.BudgetExhausted)
             {
-                _status = _sampler.IsPaused ? TraceStatus.PausedByGame : TraceStatus.Active;
+                _stopped = null;
                 _offReason = null;
             }
         }
