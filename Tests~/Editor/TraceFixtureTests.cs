@@ -237,12 +237,17 @@ namespace Playloop.Tests
         }
 
         [Test]
-        public void SampleCounts_FiftyFiftyThirtyThirty()
+        public void SampleCounts_FiftyFiftyTwentyFiveTwentyFive()
         {
+            // The first two chunks are a continuous walk, so every tick changes the
+            // pose and all 50 rows are kept. The last chunk of each run is 30 ticks
+            // that end in a STOP (the route stands still before dying, and again
+            // before quitting), so the repeats collapse and the run's final pose is
+            // written once by the end flush: 25 rows, not 30.
             Assert.AreEqual(50, Samples(_run.Chunks[0]).Count);
             Assert.AreEqual(50, Samples(_run.Chunks[1]).Count);
-            Assert.AreEqual(30, Samples(_run.Chunks[2]).Count, "run 0's last chunk: 10.0 s to 12.9 s");
-            Assert.AreEqual(30, Samples(_run.Chunks[3]).Count, "run 1: 15.0 s to 17.9 s, nothing sampled between runs");
+            Assert.AreEqual(25, Samples(_run.Chunks[2]).Count, "run 0's last chunk: 10.0 s to 12.9 s, ends standing still");
+            Assert.AreEqual(25, Samples(_run.Chunks[3]).Count, "run 1: 15.0 s to 17.9 s, ends standing still");
             foreach (var chunk in _run.Chunks)
             {
                 foreach (var row in Samples(chunk))

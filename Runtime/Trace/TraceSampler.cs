@@ -56,6 +56,15 @@ namespace Playloop.Trace
         public const double EntityMoveThreshold = 0.05;
 
         /// <summary>
+        /// How long a run of identical samples may go without emitting a row.
+        /// A resting player writes one row every this often instead of one per
+        /// tick; the reader holds position between samples, so the ghost is
+        /// unchanged. Keeps the timeline from carrying a hole a reader would
+        /// have to guess about.
+        /// </summary>
+        public const long StillHeartbeatMs = 2000;
+
+        /// <summary>
         /// Most rooms whose declared bounds are remembered over the client's
         /// lifetime. Past it a new room id is still sampled, only its bounds
         /// are dropped; rooms already declared keep updating.
@@ -122,6 +131,15 @@ namespace Playloop.Trace
         private object _lastX = 0L;
         private object _lastY = 0L;
         private long _lastDt;
+        // The full last EMITTED row, so an unchanged tick can be skipped. `_lastX`,
+        // `_lastY` and `_lastR` above already track three of these for the end block.
+        private long _lastRowDt;
+        /// <summary>dt of the most recent SKIPPED tick, or -1. See <see cref="FlushPendingStill"/>.</summary>
+        private long _pendingSkipDt = -1;
+        private int _lastRowBits;
+        private int _lastRowFacing = int.MinValue;
+        private object _lastRowAx = 0L;
+        private object _lastRowAy = 0L;
         private long _lastSampleWallMs;
         private string? _lastRoomId;
 
@@ -325,6 +343,8 @@ namespace Playloop.Trace
             _betweenRuns = true;
             if (_budgetExhausted || !_hasSample) return;
 
+            FlushPendingStill();
+
             if (!_chunkOpen)
             {
                 OpenChunk(0.0, _lastSampleWallMs);
@@ -397,8 +417,43 @@ namespace Playloop.Trace
             int r = RoomIndex(_roomId);
             object qx = Q2(_x);
             object qy = Q2(_y);
-            _rows.Add(new[] { (object)dt, qx, qy, _facing, r, _bits, Q2(_ax), Q2(_ay) });
+            object qax = Q2(_ax);
+            object qay = Q2(_ay);
+
+            // A row that repeats the previous one carries no information, and the
+            // cost of writing it is inverted: the more a player RESTS, the more of
+            // the per-session budget goes on recording nothing. That penalises the
+            // genres the Trace is most useful for (a builder or a puzzle game is
+            // mostly someone thinking with a still cursor) while a twitch game,
+            // which genuinely moves every tick, pays the same. Entities have worked
+            // this way since the first cut (EntityMoveThreshold); this is the same
+            // rule for the sample rows.
+            //
+            // Never skipped: the first row of a chunk (a chunk must open on a known
+            // pose), a run longer than StillHeartbeatMs, and any tick where an
+            // entity needs a row, because entity rows are anchored to a sample
+            // index and a moved entity pinned to a stale index would be drawn at
+            // the wrong moment.
+            if (_rows.Count > 0
+                && Equals(_lastRowAx, qax) && Equals(_lastRowAy, qay)
+                && Equals(_lastX, qx) && Equals(_lastY, qy)
+                && _lastR == r && _lastRowBits == _bits && _lastRowFacing == _facing
+                && dt - _lastRowDt < StillHeartbeatMs
+                && !EntitiesNeedRow())
+            {
+                _lastSampleWallMs = _t0 + dt;
+                _pendingSkipDt = dt;   // so a run that ends while still does not end early
+                return;
+            }
+
+            _rows.Add(new[] { (object)dt, qx, qy, _facing, r, _bits, qax, qay });
             int si = _rows.Count - 1;
+            _pendingSkipDt = -1;
+            _lastRowDt = dt;
+            _lastRowBits = _bits;
+            _lastRowFacing = _facing;
+            _lastRowAx = qax;
+            _lastRowAy = qay;
 
             _hasSample = true;
             _lastR = r;
@@ -424,6 +479,43 @@ namespace Playloop.Trace
             _chunkRoomEntries.Clear();
             _chunkEnts.Clear();
             foreach (var en in _entities) en.EmittedThisChunk = false;
+        }
+
+        /// <summary>
+        /// Write the still sample a run was sitting on, so the end block lands at
+        /// the moment the run ACTUALLY ended.
+        ///
+        /// Without this, a player who stops and then quits ends the run at the last
+        /// row that carried a change, up to <see cref="StillHeartbeatMs"/> earlier,
+        /// and Playback shows every such run finishing early. `end.dt` is defined as
+        /// the last sample's dt, so the fix is to make that sample exist rather than
+        /// to let the two drift apart.
+        /// </summary>
+        private void FlushPendingStill()
+        {
+            if (_pendingSkipDt < 0 || !_chunkOpen || _rows.Count == 0) return;
+            _rows.Add(new[] { (object)_pendingSkipDt, _lastX, _lastY, _lastRowFacing, _lastR, _lastRowBits, _lastRowAx, _lastRowAy });
+            _lastDt = _pendingSkipDt;
+            _pendingSkipDt = -1;
+        }
+
+        /// <summary>
+        /// Would <see cref="EmitEntities"/> write anything this tick? Pure: mirrors
+        /// its condition without touching state, so a skipped sample can never
+        /// strand an entity row.
+        /// </summary>
+        private bool EntitiesNeedRow()
+        {
+            for (int i = 0; i < _entities.Count; i++)
+            {
+                var en = _entities[i];
+                if (en.Despawn) return true;
+                if (!en.EmittedThisChunk) return true;
+                double dx = en.X - en.LastX;
+                double dy = en.Y - en.LastY;
+                if (dx * dx + dy * dy > EntityMoveThreshold * EntityMoveThreshold) return true;
+            }
+            return false;
         }
 
         private void EmitEntities(int sampleIndex)
