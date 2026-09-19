@@ -26,7 +26,7 @@ where sessions ended, once those views are available.
 
 - `TraceApi`: `DefineActions`, `SetRoom`, `SetPosition`, `SetInput`,
   `SetEntity` / `ClearEntity`, `Pause` / `Resume`, `End(reason)`, `Begin()`,
-  `Status`,
+  `SetSeed`, `Status`,
   and the sampling seam `Tick(unscaledSec)`. Every string is a validated
   slug; sample rows are eight numbers; nothing takes an engine type.
 - Sampling starts with the game's first state call (`SetPosition`,
@@ -64,6 +64,19 @@ where sessions ended, once those views are available.
   and returns takes no second slot, and a new session counts over from the
   names it carries. Declared room bounds are remembered for up to 1,024 rooms
   per client; past that a room is still sampled without bounds.
+- Events on the path: while the Trace is on and the game has pushed state,
+  every tracked event other than `trace_chunk` and `trace_state` carries a
+  top-level `tr` of `{"s": run, "r": room}`, the run index and the room
+  last passed to `SetRoom` (or `null`), read when the event is tracked. The
+  call order places an event tracked right after a room change in the new
+  room even before the next sample. Between `End` and the next run, events
+  belong to the run that ended. No `tr` while the Trace is off, stopped, or
+  not yet wired.
+- `SetSeed(string)` and `SetSeed(long)`: the seed the run was built from,
+  validated as `^[A-Za-z0-9_-]{1,32}$` (a long is written as its decimal
+  string). It rides every chunk of that run as `seed`, after `seg`, clears
+  when the next run opens, and applies to the next run when set between
+  runs. A chunk without a seed is unchanged byte for byte.
 - `PlayloopTrace` projects on the client's `TraceOptions.Plane`; `Attach`
   adopts it into the component and warns if the Inspector value differed.
 - **Trace Fixture** sample: a tiny scripted game that walks a known path

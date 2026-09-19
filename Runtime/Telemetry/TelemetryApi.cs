@@ -15,6 +15,34 @@ namespace Playloop.Telemetry
         [JsonProperty("name")] public string Name { get; set; } = "";
         [JsonProperty("data", NullValueHandling = NullValueHandling.Ignore)] public IReadOnlyDictionary<string, object>? Data { get; set; }
         [JsonProperty("timestamp")] public long Timestamp { get; set; }
+
+        /// <summary>
+        /// Where the event sits on the Trace: the run and room at the moment
+        /// it was tracked. Filled by the SDK while the Trace is on and the
+        /// game has pushed state; null (and absent on the wire) otherwise.
+        /// </summary>
+        [JsonProperty("tr", NullValueHandling = NullValueHandling.Ignore)] public TraceEventStamp? Tr { get; set; }
+    }
+
+    /// <summary>
+    /// The <c>tr</c> of a tracked event, <c>{"s": run, "r": room}</c>: the
+    /// 0-based run it happened in (the <c>seg</c> of that run's Trace chunks)
+    /// and the room id last passed to <c>Trace.SetRoom</c>, or null when no
+    /// room was declared.
+    /// </summary>
+    public readonly struct TraceEventStamp
+    {
+        public TraceEventStamp(int run, string? room)
+        {
+            Run = run;
+            Room = room;
+        }
+
+        /// <summary>The run index.</summary>
+        [JsonProperty("s")] public int Run { get; }
+
+        /// <summary>The room id, or null.</summary>
+        [JsonProperty("r", NullValueHandling = NullValueHandling.Include)] public string? Room { get; }
     }
 
     /// <summary>
@@ -429,6 +457,11 @@ namespace Playloop.Telemetry
 
             lock (_bufferLock)
             {
+                // The stamp is read under the same lock that picks the buffer, so it always
+                // matches the session the event lands in. EndSessionAsync closes the Trace
+                // before it sets _endRequested, so an event parked for the next session
+                // finds the Trace closed and carries no stamp, never the ended session's run.
+                ev.Tr = StampFor(name);
                 // An end is pending, so this event is not part of the session being closed.
                 // Park it for the next one rather than letting it ride the end flush or get
                 // orphaned by CompleteSessionEnd().
@@ -439,6 +472,19 @@ namespace Playloop.Telemetry
                     target.RemoveAt(0); // evict the oldest
                 }
             }
+        }
+
+        /// <summary>
+        /// The run and room the event belongs to, read from the Trace now, so
+        /// the game's call order decides it (a SetRoom just before this Track
+        /// counts). A value type: no allocation per call.
+        /// </summary>
+        private TraceEventStamp? StampFor(string name)
+        {
+            var trace = _trace;
+            if (trace == null || Playloop.Trace.TraceApi.IsTraceEventName(name)) return null;
+            if (!trace.TryGetEventStamp(out int run, out string? room)) return null;
+            return new TraceEventStamp(run, room);
         }
 
         /// <summary>
