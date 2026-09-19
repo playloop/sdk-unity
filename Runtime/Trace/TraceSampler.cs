@@ -136,6 +136,11 @@ namespace Playloop.Trace
         private bool _sessionEnded;
         private bool _paused;
 
+        // The run tracked events belong to: the seg of the run that is open,
+        // or of the run that ended until the next one opens. End moves _seg
+        // on straight away, so the stamp keeps its own copy.
+        private int _stampSeg;
+
         public TraceSampler(int hz, TracePlane plane, int maxEntities, long maxBytesPerSession, ChunkSink sink)
         {
             _hz = Math.Max(TraceOptions.MinHz, Math.Min(TraceOptions.MaxHz, hz));
@@ -269,6 +274,7 @@ namespace Playloop.Trace
         {
             if (!_betweenRuns || _sessionEnded) return;
             _betweenRuns = false;
+            _stampSeg = _seg;
             // The new run's first tick is sample zero of a new chunk.
             _hasTicked = false;
             _hasSample = false;
@@ -277,6 +283,19 @@ namespace Playloop.Trace
             // as a despawn row. Live entities carry over and are emitted once
             // in the new run's first chunk.
             _entities.RemoveAll(en => en.Despawn);
+        }
+
+        /// <summary>
+        /// The run and room a tracked event belongs to, read at the moment it
+        /// is tracked. False until the game pushes state, and after the
+        /// session ended. Between runs the run is the one that just ended; a
+        /// run that took no sample shares its index with the run after it.
+        /// </summary>
+        internal bool TryGetEventStamp(out int run, out string? roomId)
+        {
+            run = _stampSeg;
+            roomId = _roomId;
+            return _wired && !_sessionEnded;
         }
 
         public void Pause() => _paused = true;
@@ -366,6 +385,7 @@ namespace Playloop.Trace
             _hasTicked = false;
             _seq = 0;
             _seg = 0;
+            _stampSeg = 0;
             _bytesSent = 0;
             _budgetExhausted = false;
             _betweenRuns = false;

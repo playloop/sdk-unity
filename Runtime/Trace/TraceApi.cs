@@ -20,6 +20,17 @@ namespace Playloop.Trace
     /// </para>
     ///
     /// <para>
+    /// While the Trace is on and the game has pushed state, every other
+    /// tracked event carries a top-level <c>tr</c> of
+    /// <c>{"s": run, "r": room}</c>: the run it happened in and the room
+    /// last passed to <see cref="SetRoom"/>, read at the moment it was
+    /// tracked. Playback uses it to place the event on the path, so an event
+    /// tracked right after a room change lands in the new room even before
+    /// the next sample. Between <see cref="End"/> and the next run, events
+    /// belong to the run that ended.
+    /// </para>
+    ///
+    /// <para>
     /// <see cref="Tick"/> is the sampling seam. Inside Unity a hidden driver
     /// calls it from <c>Update</c> once <c>Telemetry.AutoBatch()</c> runs; a
     /// headless host calls it with its own clock. Sampling starts with the
@@ -301,6 +312,24 @@ namespace Playloop.Trace
                 ReportStateOnce();
             }
         }
+
+        /// <summary>
+        /// The run and room a tracked event belongs to, read when it is
+        /// tracked. False while the Trace is off, stopped (config or budget),
+        /// not yet wired, or after the session ended.
+        /// </summary>
+        internal bool TryGetEventStamp(out int run, out string? roomId)
+        {
+            run = 0;
+            roomId = null;
+            if (_sampler == null || _stopped.HasValue) return false;
+            return _sampler.TryGetEventStamp(out run, out roomId);
+        }
+
+        /// <summary>True for the Trace's own event names, which never carry a stamp.</summary>
+        internal static bool IsTraceEventName(string name)
+            => string.Equals(name, ChunkEventName, StringComparison.Ordinal) ||
+               string.Equals(name, StateEventName, StringComparison.Ordinal);
 
         /// <summary>Re-arm for the next session on this client.</summary>
         internal void ResetForNewSession()
