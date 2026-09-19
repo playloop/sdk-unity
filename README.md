@@ -211,11 +211,18 @@ client.Trace.End(TraceEndReason.Death);
 
 // The next run. Optional: the next SetPosition opens it too.
 client.Trace.Begin();
+
+// The seed you built this run from, if your game has one. Call it when the run starts.
+client.Trace.SetSeed(runSeed);                                // a string, or a long
 ```
 
 Sampling runs on its own driver once you call `Telemetry.AutoBatch()`; there is nothing to tick. Nothing is sampled until your first `SetPosition`, `SetRoom`, `SetInput` or `SetEntity` call, so a game that never wires the Trace sends no `trace_chunk` and no `trace_state`. The `PlayloopTrace` component (**Add Component → Playloop → Trace**) feeds a Transform's position and heading for you: set `roomId`, pick the plane (`XY` for side-on and 2D, `XZ` for top-down and 3D), and hand it your client with `Attach(client)`. Action bits and axes stay your call, because only the game knows its verbs.
 
 **Runs.** A session can hold many runs: an arcade game that respawns, a roguelite that starts over, a level select. `End(reason)` closes the current run: the partial chunk goes out with that run's `end` block (where it ended and why), and the Trace waits between runs, sampling nothing. The next run opens on `Begin()` or on your next `SetPosition`, starting a new chunk whose clock restarts at its first sample. `SetRoom`, `SetInput` and `SetEntity` between runs only update the latest values; they do not open a run. A second `End` between runs is ignored, so each run keeps the first reason it was given. Every chunk carries its run index (`seg`), so Playback can show each run's route and where it ended. When the session ends, a run still open ends with `Quit` for you; if the Trace is between runs, nothing more is sent. The `PlayloopTrace` component pushes a position every frame, so with it the next run opens on the frame after `End`; disable the component while the player is dead or in a menu if you want that time left out.
+
+**Your events on the path.** While the Trace is on, every event you `Track` is placed on the path using the run and the room at the moment you tracked it. Each one carries a small `tr` field next to its name and data: `{"s": 0, "r": "crypt"}`, the run index (the same `seg` its chunks carry) and the room you last passed to `SetRoom`, or `null` if you never declared one. Because it is read when you call `Track`, the order of your calls decides it: when one frame ends a fight in one room and builds the next, track the win before `SetRoom` for the new room and the arrival after it, and each lands in its own room even though no sample falls between them. Events tracked after `End` and before the next run opens belong to the run that just ended, so a death screen or a score tally stays with that run. There is no `tr` while the Trace is off or before your first state call, and the Trace's own `trace_chunk` and `trace_state` events never carry one.
+
+**Seeds.** If your game builds a run from a seed, `SetSeed(seed)` records it (letters, digits, `_` and `-`, up to 32 characters; a `long` overload writes the number as text). The seed rides every chunk of that run as `seed`, so the run's exact levels can be rebuilt from it later, and it clears when the next run opens: a run you never gave a seed has none. Called between runs, it applies to the run that opens next. Setting a seed does not start sampling on its own.
 
 `Trace.Status` says why nothing is flowing: `Active`, `PausedByGame`, `OffByEnvironment`, `OffByOption`, `OffByConfig` (the dashboard's per-event config ignores `trace_chunk`, which is the server-side off switch), `Disabled` (no ingest key), `BudgetExhausted`, `BetweenRuns` (after `End`, before the next run opens), or `Ended` (the session ended; the Trace re-arms with the next session). When the Trace is off for the session, the SDK sends one `trace_state` event with the reason so the session page can say so instead of showing an empty frame.
 
@@ -225,7 +232,7 @@ Sampling runs on its own driver once you call `Telemetry.AutoBatch()`; there is 
 
 ### What the Trace sends
 
-Every string on the wire is a label you declared (an action, a room id, an entity name), each a lowercase slug with a fixed cap; every sample is eight numbers. There is no overload that takes a key, a button, or free text, so keystrokes cannot reach the wire by construction. World coordinates only, rounded to two decimals; integer degrees; nothing is written to disk on the player's machine. It follows the same opt-out handling as the rest of telemetry.
+Every string on the wire is a label you declared (an action, a room id, an entity name), each a lowercase slug with a fixed cap, or the run seed you set, up to 32 letters, digits, `_` or `-`; every sample is eight numbers. There is no overload that takes a key, a button, or free text, so keystrokes cannot reach the wire by construction. World coordinates only, rounded to two decimals; integer degrees; nothing is written to disk on the player's machine. It follows the same opt-out handling as the rest of telemetry.
 
 The wording Playloop's own privacy notice uses, which you can quote or link from your store page's privacy field:
 
