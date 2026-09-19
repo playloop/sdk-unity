@@ -158,7 +158,10 @@ namespace Playloop.Tests
             var handler = Handler();
             using var client = NewClient(handler, "playtest", t => t.MaxBytesPerSession = 2000);
             client.Trace.SetPosition(0f, 0f);
-            for (int ms = 0; ms < 30000; ms += 100) client.Trace.Tick(ms / 1000.0, Wall + ms);
+            // Moves every tick: since #8 a sample that repeats the previous one is
+            // not written, so a motionless loop never accumulates enough bytes to
+            // reach the budget and this test would assert against a live Trace.
+            for (int ms = 0; ms < 30000; ms += 100) { client.Trace.SetPosition(ms % 97, ms % 89); client.Trace.Tick(ms / 1000.0, Wall + ms); }
             Assert.AreEqual(TraceStatus.BudgetExhausted, client.Trace.Status);
             client.Telemetry.Track("late_event");
 
