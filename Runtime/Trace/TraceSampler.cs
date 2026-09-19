@@ -32,7 +32,8 @@ namespace Playloop.Trace
     /// <para>
     /// Chunk document (format version 1), keys in this order: <c>v</c>,
     /// <c>seq</c> (per session, counting across runs), <c>seg</c> (the
-    /// 0-based run index, always written), <c>t0</c> (unix ms of the chunk's
+    /// 0-based run index, always written), <c>seed</c> (the run's seed, only
+    /// when the game set one), <c>t0</c> (unix ms of the chunk's
     /// first sample), <c>hz</c>, <c>plane</c>, <c>acts</c> (first chunk and
     /// after every redefine), per-chunk <c>rooms</c> and <c>ents</c> tables,
     /// <c>s</c> sample rows of exactly eight numbers
@@ -140,6 +141,10 @@ namespace Playloop.Trace
         // or of the run that ended until the next one opens. End moves _seg
         // on straight away, so the stamp keeps its own copy.
         private int _stampSeg;
+
+        // The current run's seed, and one set between runs for the next.
+        private string? _seed;
+        private string? _nextSeed;
 
         public TraceSampler(int hz, TracePlane plane, int maxEntities, long maxBytesPerSession, ChunkSink sink)
         {
@@ -275,6 +280,10 @@ namespace Playloop.Trace
             if (!_betweenRuns || _sessionEnded) return;
             _betweenRuns = false;
             _stampSeg = _seg;
+            // A seed belongs to one run: the new run has the one set between
+            // runs, or none.
+            _seed = _nextSeed;
+            _nextSeed = null;
             // The new run's first tick is sample zero of a new chunk.
             _hasTicked = false;
             _hasSample = false;
@@ -283,6 +292,17 @@ namespace Playloop.Trace
             // as a despawn row. Live entities carry over and are emitted once
             // in the new run's first chunk.
             _entities.RemoveAll(en => en.Despawn);
+        }
+
+        /// <summary>
+        /// The run's seed. While a run is open it applies to that run; between
+        /// runs it applies to the run that opens next. Not a state call: it
+        /// does not start sampling.
+        /// </summary>
+        public void SetSeed(string seed)
+        {
+            if (_betweenRuns) _nextSeed = seed;
+            else _seed = seed;
         }
 
         /// <summary>
@@ -386,6 +406,8 @@ namespace Playloop.Trace
             _seq = 0;
             _seg = 0;
             _stampSeg = 0;
+            _seed = null;
+            _nextSeed = null;
             _bytesSent = 0;
             _budgetExhausted = false;
             _betweenRuns = false;
@@ -481,10 +503,11 @@ namespace Playloop.Trace
                 ["v"] = FormatVersion,
                 ["seq"] = _seq,
                 ["seg"] = _seg,
-                ["t0"] = _t0,
-                ["hz"] = _hz,
-                ["plane"] = _plane,
             };
+            if (_seed != null) chunk["seed"] = _seed;
+            chunk["t0"] = _t0;
+            chunk["hz"] = _hz;
+            chunk["plane"] = _plane;
             if (_seq == 0 || _actionsDirty)
             {
                 chunk["acts"] = (string[])_actions.Clone();

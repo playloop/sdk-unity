@@ -15,8 +15,8 @@ namespace Playloop.Trace
     /// <para>
     /// Nothing here takes an engine type. Every string is a slug from one of
     /// three validated label families (actions, rooms, entities), each capped
-    /// in count, so a key name, a button, or free text cannot reach the wire.
-    /// Sample rows are eight numbers.
+    /// in count, or the run's short seed, so a key name, a button, or free
+    /// text cannot reach the wire. Sample rows are eight numbers.
     /// </para>
     ///
     /// <para>
@@ -224,6 +224,32 @@ namespace Playloop.Trace
             _sampler.ClearEntity(name);
         }
 
+        /// <summary>
+        /// The seed the game generated this run from, matching
+        /// <c>^[A-Za-z0-9_-]{1,32}$</c>. It rides every chunk of the run as
+        /// <c>seed</c>, so the run's levels can be rebuilt exactly. Call it
+        /// when the run starts: chunks already sent do not carry it. Between
+        /// runs it applies to the run that opens next. The seed clears when
+        /// the next run opens, so a run without a call has no seed. Setting a
+        /// seed does not start sampling on its own.
+        /// </summary>
+        public void SetSeed(string seed)
+        {
+            if (!TraceLabels.IsSeed(seed))
+            {
+                throw new ArgumentException("Trace seed must match ^[A-Za-z0-9_-]{1,32}$.", nameof(seed));
+            }
+            if (_sampler == null) { ReportStateOnce(); return; }
+            _sampler.SetSeed(seed);
+        }
+
+        /// <summary>
+        /// <see cref="SetSeed(string)"/> for a numeric seed, written as its
+        /// decimal string (a negative seed keeps its minus sign).
+        /// </summary>
+        public void SetSeed(long seed)
+            => SetSeed(seed.ToString(System.Globalization.CultureInfo.InvariantCulture));
+
         /// <summary>Stop sampling until <see cref="Resume"/>. Nothing is buffered while paused.</summary>
         public void Pause()
         {
@@ -383,7 +409,7 @@ namespace Playloop.Trace
     }
 
     /// <summary>
-    /// The three label families every string on the Trace wire comes from.
+    /// The label families every string on the Trace wire comes from.
     /// Hand-rolled character checks so a per-frame call allocates nothing.
     /// </summary>
     public static class TraceLabels
@@ -396,6 +422,19 @@ namespace Playloop.Trace
 
         /// <summary><c>^[a-z][a-z0-9_]{0,31}$</c></summary>
         public static bool IsEntityName(string? s) => IsSlug(s, 32, allowRoomChars: false);
+
+        /// <summary><c>^[A-Za-z0-9_-]{1,32}$</c>, the run seed.</summary>
+        public static bool IsSeed(string? s)
+        {
+            if (s == null || s.Length == 0 || s.Length > 32) return false;
+            for (int i = 0; i < s.Length; i++)
+            {
+                char c = s[i];
+                bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-';
+                if (!ok) return false;
+            }
+            return true;
+        }
 
         private static bool IsSlug(string? s, int maxLength, bool allowRoomChars)
         {
