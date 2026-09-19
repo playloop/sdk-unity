@@ -453,11 +453,15 @@ namespace Playloop.Telemetry
                 Name = name,
                 Data = data,
                 Timestamp = timestampMs,
-                Tr = StampFor(name),
             };
 
             lock (_bufferLock)
             {
+                // The stamp is read under the same lock that picks the buffer, so it always
+                // matches the session the event lands in. EndSessionAsync closes the Trace
+                // before it sets _endRequested, so an event parked for the next session
+                // finds the Trace closed and carries no stamp, never the ended session's run.
+                ev.Tr = StampFor(name);
                 // An end is pending, so this event is not part of the session being closed.
                 // Park it for the next one rather than letting it ride the end flush or get
                 // orphaned by CompleteSessionEnd().

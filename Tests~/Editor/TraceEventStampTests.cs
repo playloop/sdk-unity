@@ -56,6 +56,47 @@ namespace Playloop.Tests
 
         private static MockHttpHandler Handler() => MockHttpHandler.ReturnsJson("{\"sessionId\":\"s1\"}");
 
+        /// <summary>
+        /// An event tracked while a session end is on the wire belongs to the next
+        /// session, so it must never carry the ended session's run: the stamp is read
+        /// under the same lock that parks the event, after the end closed the Trace.
+        /// </summary>
+        [Test]
+        public void EventParkedForTheNextSession_CarriesNoStampFromTheEndedOne()
+        {
+            int posts = 0;
+            PlayloopClient? self = null;
+            var handler = new MockHttpHandler();
+            handler.Responder = req =>
+            {
+                if (req.Url.EndsWith("/api/telemetry", StringComparison.Ordinal))
+                {
+                    posts++;
+                    if (posts == 2) self!.Telemetry.Track("during");
+                }
+                return new Http.HttpResponseData(200, "{\"ok\":true,\"sessionId\":\"s1\"}",
+                    new Dictionary<string, string> { ["content-type"] = "application/json" });
+            };
+            using var client = NewClient(handler);
+            self = client;
+            client.Trace.SetRoom("hall");
+            client.Trace.SetPosition(1f, 1f);
+            client.Trace.Tick(0.0, Wall);
+            client.Telemetry.Track("before");
+            client.Telemetry.FlushAsync().GetAwaiter().GetResult();
+            client.Telemetry.EndSessionAsync().GetAwaiter().GetResult();
+
+            var ended = handler.Calls.Where(c => c.Url.EndsWith("/api/telemetry", StringComparison.Ordinal)).ToList();
+            var first = (JArray)JObject.Parse(Encoding.UTF8.GetString(ended[0].JsonBody!))["events"]!;
+            Assert.AreEqual("hall", first.Single(e => e["name"]!.Value<string>() == "before")["tr"]!["r"]!.Value<string>());
+
+            client.Telemetry.FlushAsync().GetAwaiter().GetResult();
+            var next = JObject.Parse(Encoding.UTF8.GetString(handler.Calls.Last(c => c.Url.EndsWith("/api/telemetry", StringComparison.Ordinal)).JsonBody!));
+            var during = ((JArray)next["events"]!).Cast<JObject>().Single(e => e["name"]!.Value<string>() == "during");
+            Assert.IsNull(next["sessionId"], "the parked event opens the next session");
+            Assert.IsNull(during["tr"], "no stamp from the session that ended");
+        }
+
         [Test]
         public void OrdinaryEvent_WhileTracing_CarriesRunAndRoom_AtTheTopLevel()
         {
