@@ -133,13 +133,16 @@ namespace Playloop.Tests
             var sampler = new TraceSampler(10, TracePlane.XY, 8, TraceOptions.DefaultMaxBytesPerSession, (c, t0) => chunks.Add(c));
             sampler.SetRoom("hall", null);
 
-            sampler.Tick(0.00, Wall);
-            sampler.Tick(0.05, Wall + 50);   // inside the period: no sample
-            sampler.Tick(0.10, Wall + 100);
-            sampler.Tick(0.20, Wall + 200);
-            sampler.Tick(1.20, Wall + 1200); // a one-second hitch: ONE sample, dt shows it
-            sampler.Tick(1.25, Wall + 1250); // still inside the re-anchored period
-            sampler.Tick(1.30, Wall + 1300);
+            // Moves every tick on purpose: this test is about period re-anchoring
+            // after a hitch, not about a still player, and an unchanged sample is
+            // skipped now (see Still_CollapsesToAHeartbeat).
+            sampler.SetPosition(1, 1, -1); sampler.Tick(0.00, Wall);
+            sampler.SetPosition(2, 1, -1); sampler.Tick(0.05, Wall + 50);   // inside the period: no sample
+            sampler.SetPosition(3, 1, -1); sampler.Tick(0.10, Wall + 100);
+            sampler.SetPosition(4, 1, -1); sampler.Tick(0.20, Wall + 200);
+            sampler.SetPosition(5, 1, -1); sampler.Tick(1.20, Wall + 1200); // a one-second hitch: ONE sample, dt shows it
+            sampler.SetPosition(6, 1, -1); sampler.Tick(1.25, Wall + 1250); // still inside the re-anchored period
+            sampler.SetPosition(7, 1, -1); sampler.Tick(1.30, Wall + 1300);
             sampler.End(TraceEndReason.Timeout);
 
             Assert.AreEqual(1, chunks.Count);
@@ -177,7 +180,7 @@ namespace Playloop.Tests
             var sampler = new TraceSampler(20, TracePlane.XY, 8, TraceOptions.DefaultMaxBytesPerSession, (c, t0) => chunks.Add(c));
             sampler.DefineActions(new[] { "move" });
             sampler.SetPosition(0, 0, -1); // the first state call starts sampling
-            for (int ms = 0; ms < 12000; ms += 50) sampler.Tick(ms / 1000.0, Wall + ms);
+            for (int ms = 0; ms < 12000; ms += 50) { sampler.SetPosition(ms % 97, ms % 89, -1); sampler.Tick(ms / 1000.0, Wall + ms); }
             Assert.AreEqual(2, chunks.Count, "two full chunks of 100 samples at 20 Hz; the third is still open");
             Assert.AreEqual(100, ((object[])chunks[0]["s"]).Length);
             Assert.AreEqual(100, ((object[])chunks[1]["s"]).Length);
@@ -197,7 +200,9 @@ namespace Playloop.Tests
             var chunks = new List<Dictionary<string, object>>();
             var sampler = new TraceSampler(10, TracePlane.XY, 8, maxBytesPerSession: 2000, (c, t0) => chunks.Add(c));
             sampler.SetPosition(0, 0, -1); // the first state call starts sampling
-            for (int ms = 0; ms < 30000; ms += 100) sampler.Tick(ms / 1000.0, Wall + ms);
+            // Moves every tick: a still player no longer writes a row per tick, so a
+            // motionless loop would never reach the budget at all.
+            for (int ms = 0; ms < 30000; ms += 100) { sampler.SetPosition(ms % 97, ms % 89, -1); sampler.Tick(ms / 1000.0, Wall + ms); }
             Assert.IsTrue(sampler.BudgetExhausted);
             Assert.AreEqual(2, chunks.Count, "the second chunk crosses a 2000-byte budget and is the last");
             Assert.AreEqual("budget", ((Dictionary<string, object>)chunks[1]["end"])["reason"]);
@@ -211,13 +216,79 @@ namespace Playloop.Tests
             var handler = new MockHttpHandler();
             using var client = NewClient(handler, "playtest", t => t.MaxBytesPerSession = 2000);
             client.Trace.SetPosition(0f, 0f); // the first state call starts sampling
-            for (int ms = 0; ms < 30000; ms += 100) client.Trace.Tick(ms / 1000.0, Wall + ms);
+            // Moves every tick: a still player no longer writes a row per tick, so a
+            // motionless loop would never reach the budget at all.
+            for (int ms = 0; ms < 30000; ms += 100) { client.Trace.SetPosition(ms % 97, ms % 89); client.Trace.Tick(ms / 1000.0, Wall + ms); }
             Assert.AreEqual(TraceStatus.BudgetExhausted, client.Trace.Status);
             var names = client.Telemetry.SnapshotPending().Select(e => e.Name).ToList();
             Assert.AreEqual(2, names.Count(n => n == "trace_chunk"));
             Assert.AreEqual(1, names.Count(n => n == "trace_state"));
             var state = client.Telemetry.SnapshotPending().Single(e => e.Name == "trace_state");
             Assert.AreEqual("budget", state.Data!["reason"]);
+        }
+
+        [Test]
+        public void Still_CollapsesToOneRowPlusAHeartbeat()
+        {
+            var chunks = new List<Dictionary<string, object>>();
+            var sampler = new TraceSampler(10, TracePlane.XY, 8, TraceOptions.DefaultMaxBytesPerSession, (c, t0) => chunks.Add(c));
+            sampler.SetPosition(7, 7, -1);
+            // 4.5 s of a player who never moves: 45 ticks at 10 Hz.
+            for (int ms = 0; ms < 4500; ms += 100) sampler.Tick(ms / 1000.0, Wall + ms);
+            sampler.End(TraceEndReason.Quit);
+
+            var rows = ((object[])chunks[0]["s"]).Cast<object[]>().ToList();
+            // The opening pose, a heartbeat every StillHeartbeatMs, and the end flush.
+            CollectionAssert.AreEqual(new long[] { 0, 2000, 4000, 4400 }, rows.Select(r => (long)r[0]).ToArray());
+            foreach (var row in rows)
+            {
+                Assert.AreEqual(7L, row[1], "a skipped run never moves the pose");
+                Assert.AreEqual(7L, row[2]);
+            }
+        }
+
+        [Test]
+        public void Still_KeepsARowWheneverStateChanges()
+        {
+            var chunks = new List<Dictionary<string, object>>();
+            var sampler = new TraceSampler(10, TracePlane.XY, 8, TraceOptions.DefaultMaxBytesPerSession, (c, t0) => chunks.Add(c));
+            sampler.DefineActions(new[] { "fire" });
+            sampler.SetPosition(7, 7, -1);
+            sampler.Tick(0.0, Wall);
+            sampler.Tick(0.1, Wall + 100);          // identical: skipped
+            sampler.SetInput(1, 0, 0);              // bits changed, same position
+            sampler.Tick(0.2, Wall + 200);
+            sampler.SetRoom("crypt", null);         // room changed, same position and bits
+            sampler.Tick(0.3, Wall + 300);
+            sampler.SetPosition(7, 7, 90);          // facing changed only
+            sampler.Tick(0.4, Wall + 400);
+            sampler.End(TraceEndReason.Quit);
+
+            var rows = ((object[])chunks[0]["s"]).Cast<object[]>().ToList();
+            CollectionAssert.AreEqual(new long[] { 0, 200, 300, 400 }, rows.Select(r => (long)r[0]).ToArray(),
+                "a still position is skipped, but bits, room and facing each keep their row");
+        }
+
+        [Test]
+        public void Still_KeepsARowWhenAnEntityMoves()
+        {
+            var chunks = new List<Dictionary<string, object>>();
+            var sampler = new TraceSampler(10, TracePlane.XY, 8, TraceOptions.DefaultMaxBytesPerSession, (c, t0) => chunks.Add(c));
+            sampler.SetPosition(7, 7, -1);
+            sampler.SetEntity("cart", 1, 1);
+            sampler.Tick(0.0, Wall);
+            sampler.Tick(0.1, Wall + 100);          // player and cart both still: skipped
+            sampler.SetEntity("cart", 5, 5);        // the cart moved; the player did not
+            sampler.Tick(0.2, Wall + 200);
+            sampler.End(TraceEndReason.Quit);
+
+            var rows = ((object[])chunks[0]["s"]).Cast<object[]>().ToList();
+            CollectionAssert.AreEqual(new long[] { 0, 200 }, rows.Select(r => (long)r[0]).ToArray(),
+                "the tick at 100 is skipped; the tick at 200 is kept because the cart moved");
+            // The point of forcing it: entity rows are anchored to a sample INDEX, so
+            // without the sample at 200 the cart would be drawn at the sample for 0.
+            var entityRows = ((object[])chunks[0]["e"]).Cast<object[]>().ToList();
+            Assert.AreEqual(1, entityRows.Last()[0], "the cart's move is anchored to the row it happened on");
         }
 
         [Test]
@@ -230,6 +301,7 @@ namespace Playloop.Tests
             sampler.Pause();
             for (int ms = 100; ms < 1000; ms += 100) sampler.Tick(ms / 1000.0, Wall + ms);
             sampler.Resume();
+            sampler.SetPosition(9, 9, -1);   // moves, so the resumed row is not skipped as unchanged
             sampler.Tick(1.0, Wall + 1000);
             sampler.End(TraceEndReason.Quit);
             var rows = ((object[])chunks[0]["s"]).Cast<object[]>().ToList();
@@ -284,7 +356,7 @@ namespace Playloop.Tests
             var sampler = new TraceSampler(10, TracePlane.XY, 8, TraceOptions.DefaultMaxBytesPerSession, (c, t0) => chunks.Add(c));
             sampler.SetRoom("vault", null);
             sampler.SetPosition(50, 5, 0);
-            for (int ms = 0; ms < 5000; ms += 100) sampler.Tick(ms / 1000.0, Wall + ms);
+            for (int ms = 0; ms < 5000; ms += 100) { sampler.SetPosition(50 + ms % 7, 5, 0); sampler.Tick(ms / 1000.0, Wall + ms); }
             Assert.AreEqual(1, chunks.Count, "the 50th sample closed the chunk");
             sampler.End(TraceEndReason.Death);
             Assert.AreEqual(2, chunks.Count);
@@ -324,7 +396,11 @@ namespace Playloop.Tests
             Assert.AreEqual(1, chunks.Count);
             Assert.AreEqual(Wall + 3000, chunks[0]["t0"], "the chunk starts at the first tick after the state call");
             var rows = ((object[])chunks[0]["s"]).Cast<object[]>().ToList();
-            CollectionAssert.AreEqual(new long[] { 0, 100, 200, 300, 400, 500 }, rows.Select(r => (long)r[0]).ToArray());
+            // Two rows, not six: the player never moved, so the repeats are skipped
+            // (StillHeartbeatMs has not elapsed) and the reader holds position
+            // between samples. The row at 500 is the pending-still flush on End, so
+            // the run ends when it actually ended rather than at the last change.
+            CollectionAssert.AreEqual(new long[] { 0, 500 }, rows.Select(r => (long)r[0]).ToArray());
             Assert.AreEqual(1L, rows[0][1]);
             Assert.AreEqual(2L, rows[0][2]);
         }
@@ -519,7 +595,7 @@ namespace Playloop.Tests
             sampler.SetRoom("hall", null);
             sampler.SetPosition(1, 1, 0);
             sampler.Tick(0.0, Wall);
-            sampler.Tick(0.1, Wall + 100);
+            sampler.SetPosition(2, 1, 0); sampler.Tick(0.1, Wall + 100);
             sampler.End(TraceEndReason.Death);
             Assert.AreEqual(1, chunks.Count);
             Assert.AreEqual(0, chunks[0]["seg"]);
@@ -530,7 +606,7 @@ namespace Playloop.Tests
 
             sampler.SetPosition(3, 3, 0);
             sampler.Tick(2.05, Wall + 2050);
-            sampler.Tick(2.15, Wall + 2150);
+            sampler.SetPosition(4, 3, 0); sampler.Tick(2.15, Wall + 2150);
             sampler.End(TraceEndReason.Quit);
 
             Assert.AreEqual(2, chunks.Count, "the new run starts its own chunk");
@@ -606,9 +682,9 @@ namespace Playloop.Tests
             sampler.SetPosition(0, 0, -1);
             sampler.Begin(); // the first run is already open
             sampler.Tick(0.0, Wall);
-            sampler.Tick(0.1, Wall + 100);
+            sampler.SetPosition(1, 0, -1); sampler.Tick(0.1, Wall + 100);
             sampler.Begin(); // still a no-op mid-run: no new chunk, no clock reset
-            sampler.Tick(0.2, Wall + 200);
+            sampler.SetPosition(2, 0, -1); sampler.Tick(0.2, Wall + 200);
             sampler.End(TraceEndReason.Death);
             Assert.AreEqual(1, chunks.Count);
             CollectionAssert.AreEqual(new long[] { 0, 100, 200 }, Rows(chunks[0]).Select(r => (long)r[0]).ToArray());
