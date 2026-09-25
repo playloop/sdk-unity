@@ -58,6 +58,23 @@ namespace Playloop
         /// </summary>
         public bool SendInEditor { get; set; } = false;
 
+        /// <summary>
+        /// Where this build is distributed, stamped on each session so the dashboard
+        /// can split players by source: for example <c>"itch"</c>, <c>"direct"</c>, or
+        /// <c>"steam-playtest"</c>. A short slug (letters, digits, <c>.</c>, <c>_</c>,
+        /// <c>-</c>, up to 40 characters); lowercased and trimmed.
+        ///
+        /// <para>
+        /// Leave it <c>null</c> (the default) and the SDK reports <c>"steam"</c> on its
+        /// own when a Steamworks integration (Facepunch.Steamworks, or the
+        /// Steamworks.NET <c>SteamManager</c>) is already initialised when the client
+        /// is constructed, and reports nothing otherwise. A value you set here always
+        /// wins. Web builds don't need it: the site the game is played on is recorded
+        /// for you.
+        /// </para>
+        /// </summary>
+        public string? Distribution { get; set; } = null;
+
         /// <summary>How often the auto-batch loop flushes telemetry, in milliseconds.</summary>
         public int TelemetryFlushIntervalMs { get; set; } = 5000;
 

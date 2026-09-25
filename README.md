@@ -324,6 +324,7 @@ PlayloopClient.Current.InstallCrashHandler();
 | `ApiKey` | `string` | - | Your Ingest key. A blank/missing key never throws; it builds a **disabled** client (every call no-ops). Read `IsEnabled`. See [Safe to construct](#safe-to-construct-never-raise). |
 | `Environment` | `string` | `"dev"` | Environment slug (e.g. `dev`, `demo`, `production`). Auto-created on first use. Left at the default, it's [auto-derived from the build](#per-game-environments) (development build → `"dev"`, shipping release → `"production"`); any explicit non-default value wins. |
 | `SendInEditor` | `bool` | `false` | When `false`, telemetry is suppressed in the editor + development builds so playtesting doesn't pollute real data (logs a one-time warning). Set `true` to send from the editor anyway. See [Editor & development builds](#editor--development-builds). |
+| `Distribution` | `string?` | `null` | Where this build is distributed (`itch`, `direct`, `steam-playtest`, ...), so the dashboard can split players by source. Left `null`, the SDK reports `steam` when Steamworks is already initialised and nothing otherwise. See [Where a session was played](#where-a-session-was-played). |
 | `DeviceId` | `string?` | auto-resolved | Pass to override the hardware ID. |
 | `TelemetryFlushIntervalMs` | `int` | `5000` | Flush cadence for the background loop. |
 | `PrefetchExperiments` | `bool` | `false` | Eagerly fetch experiment assignments at construction instead of lazily on the first `Experiments.VariantAsync()` call. |
@@ -374,6 +375,23 @@ By default, telemetry is **suppressed while running in the Unity editor or a dev
 To send telemetry from the editor anyway (say you're testing the ingest pipeline end to end), set `SendInEditor = true`, or tick **Send In Editor** on the `PlayloopSettings` asset. Pair it with `Environment = "dev"` so the editor traffic is tagged and trivial to filter out of your production numbers. Suppression is a no-op in a release player build: nothing is ever held back there.
 
 Every session is also stamped with an `engine` (`"unity"`), an `engineVersion` (your Unity version), and an `isEditor` flag, so you can slice editor-originated sessions out on the dashboard.
+
+## Where a session was played
+
+Each session can carry a `distribution`: where the player got the game. It powers the per-source split on the dashboard and in the API (players from itch vs your own site vs Steam).
+
+- **Web builds need nothing.** Playloop records the site the game was played on (itch.io, your own site, anywhere else) from the browser's request, host name only.
+- **Desktop builds** report what you set. Put a short slug in `Distribution` (or the **Distribution** field on the `PlayloopSettings` asset) per build: `itch` for the itch download, `direct` for a build you hand out yourself, `steam-playtest` for a Steam playtest.
+- **Steam** is detected on its own when you leave `Distribution` empty: if Facepunch.Steamworks (`SteamClient.IsValid`) or the Steamworks.NET `SteamManager` (`SteamManager.Initialized`) reports Steam as initialised when the client is constructed, the session says `steam`. The SDK has no dependency on either package and never calls the Steam API itself, so construct the Playloop client after Steam starts (or set `Distribution = "steam"`).
+
+A value you set always wins over detection. If nothing is set and Steam is not detected, the field is left off: the SDK never guesses.
+
+```csharp
+var client = new PlayloopClient(new PlayloopOptions {
+    ApiKey       = "pl_ik_...",
+    Distribution = "itch",   // the itch.io desktop download
+});
+```
 
 ## API keys
 

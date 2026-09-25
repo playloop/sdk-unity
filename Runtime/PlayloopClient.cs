@@ -42,6 +42,7 @@ namespace Playloop
         private readonly int _shutdownFlushTimeoutMs;
         private readonly GameResolver _resolver;
         private readonly string _environment;
+        private readonly string? _distribution;
         private readonly bool _enabled;
         private bool _disposed;
 #if UNITY_WEBGL && !UNITY_EDITOR
@@ -303,6 +304,7 @@ namespace Playloop
             Heartbeat = new HeartbeatEmitter(Telemetry, State, ResolveHeartbeatSec(options.HeartbeatSec));
             Experiments = new ExperimentsApi(http, DeviceId, enabled: _enabled);
             _environment = resolvedEnvironment;
+            _distribution = options.Distribution;
 
             // DISABLED mode: every nested API is built (no null windows) but
             // inert. Stop here - no prefetch, no background fetch tasks, no quit
@@ -595,6 +597,10 @@ namespace Playloop
             try { meta["systemLanguage"] = UnityEngine.Application.systemLanguage.ToString(); }
             catch { /* same, best-effort */ }
 #endif
+            // Where this build is played (steam / itch / direct ...). Omitted
+            // when unknown: never guessed. See DistributionResolver.
+            var distribution = DistributionResolver.Resolve(_distribution, DistributionResolver.IsSteamInitialized);
+            if (distribution != null) meta["distribution"] = distribution;
             try { Telemetry.Track("session_start", meta); }
             catch
             {

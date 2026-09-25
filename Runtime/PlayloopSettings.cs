@@ -42,6 +42,9 @@ namespace Playloop
         [Tooltip("Send telemetry from the Unity editor + development builds. OFF by default: editor playtesting is suppressed so it doesn't pollute real session data (logs a one-time warning). Turn ON to test the ingest pipeline locally; pair with Environment = 'dev' so the traffic is easy to filter out. No effect in release builds.")]
         [SerializeField] private bool sendInEditor = false;
 
+        [Tooltip("Where this build is distributed, e.g. 'itch', 'direct', 'steam-playtest'. Stamped on each session so the dashboard can split players by source. Leave empty: the SDK reports 'steam' when Steamworks is already initialised, and nothing otherwise. Web builds don't need it; the site they are played on is recorded automatically.")]
+        [SerializeField] private string distribution = "";
+
         [Header("Telemetry batching")]
         [Tooltip("How often the auto-batch loop flushes telemetry, in milliseconds.")]
         [SerializeField, Min(100)] private int flushIntervalMs = 5000;
@@ -90,6 +93,7 @@ namespace Playloop
                 BaseUrl = baseUrl,
                 Environment = environment,
                 SendInEditor = sendInEditor,
+                Distribution = string.IsNullOrWhiteSpace(distribution) ? null : distribution,
                 TelemetryFlushIntervalMs = flushIntervalMs,
                 TelemetryMaxBufferSize = maxBufferSize,
                 TimeoutSeconds = timeoutSeconds,
