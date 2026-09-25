@@ -70,8 +70,9 @@ path needs a human at the editor. Prefer the code path when working headless.
 
 Common `PlayloopOptions` fields: `ApiKey` (required ingest key), `BaseUrl`
 (default `https://playloop.gg`), `Environment` (default `"dev"`), `SendInEditor`
-(default `false`; see the verify note below), `DeviceId` (auto-resolved from
-hardware if omitted), `TelemetryFlushIntervalMs` (default 5000),
+(default `false`; see the verify note below), `Distribution` (optional per-build
+slug such as `itch` or `direct`; left null, `steam` is reported when Steamworks is
+already initialised), `DeviceId` (auto-resolved from hardware if omitted), `TelemetryFlushIntervalMs` (default 5000),
 `PrefetchExperiments`, `RetryAttempts`/`RetryBaseMs`/`RetryMaxMs`,
 `AutoShutdownOnQuit` (default true), and the `AutoInstrument` sub-object. Full
 table + the Inspector equivalents: `README.md`.

@@ -14,6 +14,16 @@ the manifest, the runtime `SDK_VERSION` constant, and the CHANGELOG
 aligned so the dashboard's "shipped on" attribution stays accurate
 during the remaining pre-launch iterations.
 
+### Added: where a session was played (added 2026-09-25)
+
+- `PlayloopOptions.Distribution` (and **Distribution** on the
+  `PlayloopSettings` asset): an optional per-build slug such as `itch`,
+  `direct` or `steam-playtest`, sent on `session_start` so the dashboard can
+  split players by source.
+- Left empty, the SDK reports `steam` when Facepunch.Steamworks or the
+  Steamworks.NET `SteamManager` says Steam is initialised, and nothing
+  otherwise. No new package dependency.
+
 ### Added: Trace (added 2026-09-17)
 
 Sampled session state for Playback. `client.Trace` takes the player's
